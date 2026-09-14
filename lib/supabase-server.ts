@@ -1,9 +1,7 @@
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-
-const URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+import { getSupabasePublicEnv } from './env';
 
 export type Role = 'manager' | 'staff';
 
@@ -19,8 +17,9 @@ export interface Profile {
 }
 
 export function createServerSupabase() {
+  const { url, anonKey } = getSupabasePublicEnv();
   const store = cookies();
-  return createServerClient(URL, ANON, {
+  return createServerClient(url, anonKey, {
     cookies: {
       getAll: () => store.getAll(),
       setAll: (cs: Array<{ name: string; value: string; options?: Record<string, unknown> }>) => {

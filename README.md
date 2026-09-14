@@ -39,8 +39,16 @@ npm run dev
 ```
 → http://localhost:3000 — sign in with `manager@opk.com` / `opk12345`
 
-### 6. Deploy
-Push to GitHub → Import to Vercel → Add 3 env vars → Deploy.
+### 6. Deploy to GitHub and Vercel
+1. Create a GitHub repository and push this project. `.env.local`, `node_modules`, and `.next` are ignored automatically.
+2. In Vercel, import the GitHub repository.
+3. Open **Project Settings → Environment Variables** and add these three variables for **Production**, **Preview**, and **Development**:
+  - `NEXT_PUBLIC_SUPABASE_URL`
+  - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+  - `SUPABASE_SERVICE_ROLE_KEY`
+4. Redeploy after saving the variables.
+
+Use the values from Supabase **Project Settings → API**. Never commit `.env.local` or expose `SUPABASE_SERVICE_ROLE_KEY` in client-side code.
 
 ---
 

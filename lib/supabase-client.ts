@@ -1,4 +1,5 @@
 import { createBrowserClient } from '@supabase/ssr';
+import { getSupabasePublicEnv } from './env';
 
 export type Role = 'manager' | 'staff';
 
@@ -50,9 +51,7 @@ export interface Sale {
   staff?: { full_name: string };
 }
 
-const URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
-
 export function createClient() {
-  return createBrowserClient(URL, ANON);
+  const { url, anonKey } = getSupabasePublicEnv();
+  return createBrowserClient(url, anonKey);
 }
