@@ -1,40 +1,90 @@
-# OPK HARDWARE - POS & Management System
+# OPK Hardware POS
 
-Full-stack hardware shop Point of Sale and inventory management system built with Next.js, Supabase, and TypeScript.
+**Build Better • Stronger • Together**
 
-## Architecture
+## 14 Files. One App. Done.
 
-- **Frontend**: Next.js 14 + React + TypeScript + Tailwind CSS
-- **Backend**: Next.js API routes & server actions
-- **Database**: Supabase PostgreSQL
-- **Auth**: Supabase Auth
-- **Storage**: Supabase Storage for product images
-- **Deployment**: Vercel
+### 1. Install
+```bash
+npm install
+```
 
-## Features
+### 2. Supabase
+- https://supabase.com → New Project
+- SQL Editor → paste `supabase/schema.sql` → Run
+- Copy URL + anon key + service_role key from Settings → API
 
-- Role-based access (Manager / Staff)
-- Product management (CRUD + deactivation)
-- Inventory tracking with stock movements
-- POS with cart, checkout, and receipt
-- Sales history with filters
-- Staff management (create, disable)
-- Dashboard with key metrics
+### 3. Env
+```bash
+cp .env.example .env.local
+```
+Fill in the three values.
 
-## Setup
+### 4. Create First Manager
+Supabase → **Authentication → Users → Add User**:
+- Email `manager@opk.com`, Password `opk12345`, ✅ Auto-confirm
 
-1. Clone repository
-2. Install dependencies: `npm install`
-3. Copy `.env.example` to `.env.local` and fill in Supabase credentials
-4. Run Supabase migrations (in order: 001, 002)
-5. Create a storage bucket `product-images` in Supabase
-6. Create a manager account manually (see instructions below)
-7. Start dev server: `npm run dev`
+SQL Editor:
+```sql
+insert into profiles (auth_user_id, full_name, staff_id, email, role, status)
+values (
+  (select id from auth.users where email='manager@opk.com'),
+  'Store Manager','MGR-001','manager@opk.com','manager','active'
+);
+```
 
-## Creating a Manager Account
+### 5. Run
+```bash
+npm run dev
+```
+→ http://localhost:3000 — sign in with `manager@opk.com` / `opk12345`
 
-1. Sign up a user via Supabase Auth (e.g., using the Auth UI)
-2. Insert a profile record:
-   ```sql
-   INSERT INTO profiles (auth_user_id, staff_id, full_name, email, role, status)
-   VALUES ('user-uuid', 'MGR001', 'Manager Name', 'manager@example.com', 'manager', 'active');
+### 6. Deploy
+Push to GitHub → Import to Vercel → Add 3 env vars → Deploy.
+
+---
+
+## What's Inside
+
+**14 files total:**
+
+```
+package.json              deps
+tailwind.config.ts        colors/fonts
+postcss.config.js         css pipeline
+tsconfig.json             typescript
+.env.example              supabase keys
+
+app/
+  globals.css             base styles
+  layout.tsx              root html
+  login/page.tsx          login screen
+  app/page.tsx            the whole app
+
+components/
+  App.tsx                 UI + Sidebar + all views + all modals
+
+lib/
+  supabase.ts             types + clients + auth helpers
+  actions.ts              server actions (sale, staff, product, stock)
+
+supabase/
+  schema.sql              tables + RLS + seed data
+
+README.md                 this file
+```
+
+## Routes
+- `/login` — Sign in
+- `/app` — Everything else (Dashboard, POS, Products, Inventory, Sales, Staff, Settings)
+
+Navigation is **client-side** (no URL changes) — fast and simple.
+
+## Roles
+- **Manager** — sees all sections
+- **Staff** — sees POS + Sales + Settings only
+
+Manager creates staff from the **Staff** section.
+
+## Tech
+Next.js 14 · React · TypeScript · Tailwind · Supabase · Vercel
