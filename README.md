@@ -54,7 +54,7 @@ Use the values from Supabase **Project Settings → API**. Never commit `.env.lo
 
 ## What's Inside
 
-**14 files total:**
+**Project files:**
 
 ```
 package.json              deps
@@ -73,8 +73,11 @@ components/
   App.tsx                 UI + Sidebar + all views + all modals
 
 lib/
-  supabase.ts             types + clients + auth helpers
-  actions.ts              server actions (sale, staff, product, stock)
+  env.ts                  environment variable validation
+  supabase-client.ts      browser client and shared types
+  supabase-server.ts      server client and auth helpers
+  supabase-admin.ts       admin client
+  action.ts               server actions (sale, staff, product, stock)
 
 supabase/
   schema.sql              tables + RLS + seed data
