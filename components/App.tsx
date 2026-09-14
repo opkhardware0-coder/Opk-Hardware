@@ -7,8 +7,8 @@ import {
   Boxes, Receipt, Users, Settings, Search, Plus, Minus, Pencil, AlertTriangle,
   TrendingUp, ShoppingBag, DollarSign, Lock, User as UserIcon, Eye, EyeOff, ArrowRight,
 } from 'lucide-react';
-import { createClient, type Profile, type Product, type Category, type CartItem, type Sale } from '@/lib/supabase';
-import { createSale, saveProduct, adjustStock, createStaff, toggleStaffStatus } from '@/lib/actions';
+import { createClient, type Profile, type Product, type Category, type CartItem, type Sale } from '@/lib/supabase-client';
+import { createSale, saveProduct, adjustStock, createStaff, toggleStaffStatus } from '@/lib/action';
 
 // ============================================================
 // UI PRIMITIVES
@@ -19,7 +19,7 @@ export const Button = forwardRef<HTMLButtonElement,
   React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary'|'secondary'|'ghost'; loading?: boolean }
 >(function Button({ variant = 'primary', loading, className = '', children, disabled, ...props }, ref) {
   const styles = {
-    primary: 'bg-brand-500 hover:bg-brand-600 text-white shadow-sm',
+    primary: 'bg-brand-500 hover:bg-brand-600 text-white shadow-[0_8px_18px_rgba(245,124,50,0.25)]',
     secondary: 'bg-white border border-gray-200 hover:bg-gray-50 text-gray-800',
     ghost: 'hover:bg-gray-100 text-gray-700',
   };
@@ -42,7 +42,7 @@ export const Input = forwardRef<HTMLInputElement,
       <div className="relative">
         {icon && <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">{icon}</span>}
         <input ref={ref}
-          className={`w-full h-12 rounded-lg border border-gray-200 bg-white text-sm placeholder-gray-400 focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 ${icon ? 'pl-10' : 'pl-4'} ${rightIcon ? 'pr-10' : 'pr-4'} ${className}`}
+          className={`w-full h-12 rounded-xl border border-gray-200 bg-white text-sm placeholder:text-gray-400 focus:outline-none focus:border-brand-500 focus:ring-2 focus:ring-brand-100 ${icon ? 'pl-10' : 'pl-4'} ${rightIcon ? 'pr-10' : 'pr-4'} ${className}`}
           {...props} />
         {rightIcon && <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">{rightIcon}</span>}
       </div>
@@ -121,16 +121,53 @@ export function LoginForm() {
 
   return (
     <form onSubmit={submit} className="space-y-5">
-      <Input label="Staff ID / Email" placeholder="Enter your staff ID or email"
-        icon={<UserIcon className="w-4 h-4" />} value={id} onChange={(e) => setId(e.target.value)} required />
-      <Input label="Password" type={show ? 'text' : 'password'} placeholder="Enter your password"
+      <Input
+        label="Staff ID / Email"
+        placeholder="Enter your staff ID or email"
+        icon={<UserIcon className="w-4 h-4" />}
+        value={id}
+        onChange={(e) => setId(e.target.value)}
+        required
+        className="bg-[#f9f9f9] border-[#e4e4e4]"
+      />
+
+      <Input
+        label="Password"
+        type={show ? 'text' : 'password'}
+        placeholder="Enter your password"
         icon={<Lock className="w-4 h-4" />}
-        rightIcon={<button type="button" onClick={() => setShow(!show)}>{show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}</button>}
-        value={pw} onChange={(e) => setPw(e.target.value)} required />
+        rightIcon={<button type="button" onClick={() => setShow(!show)} className="p-1">{show ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}</button>}
+        value={pw}
+        onChange={(e) => setPw(e.target.value)}
+        required
+        className="bg-[#f9f9f9] border-[#e4e4e4]"
+      />
+
       {error && <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</p>}
-      <Button type="submit" loading={loading} className="w-full">Sign In <ArrowRight className="w-4 h-4" /></Button>
-      <p className="text-xs text-gray-400 text-center">
-        By signing in, you agree to OPK Hardware's Terms & Privacy Policy.
+
+      <Button type="submit" loading={loading} className="w-full h-12 rounded-xl text-base">
+        Sign In <ArrowRight className="w-4 h-4" />
+      </Button>
+
+      <div className="pt-1">
+        <div className="flex items-center gap-3 my-4">
+          <div className="h-px flex-1 bg-[#e7e7e7]" />
+          <span className="text-xs text-gray-400 uppercase tracking-[0.2em]">Or</span>
+          <div className="h-px flex-1 bg-[#e7e7e7]" />
+        </div>
+
+        <div className="space-y-3">
+          <button type="button" className="w-full h-11 border border-[#e2e2e2] rounded-xl bg-white text-sm font-medium text-gray-700 flex items-center justify-center gap-2 shadow-sm">
+            <span className="text-base">G</span> Continue with Google
+          </button>
+          <button type="button" className="w-full h-11 border border-[#e2e2e2] rounded-xl bg-white text-sm font-medium text-gray-700 flex items-center justify-center gap-2 shadow-sm">
+            <span className="text-base"></span> Continue with Apple
+          </button>
+        </div>
+      </div>
+
+      <p className="text-[11px] text-gray-400 text-center leading-relaxed">
+        By signing in, you agree to OPK Hardware&apos;s Terms of Service and Privacy Policy.
       </p>
     </form>
   );
@@ -166,11 +203,11 @@ function Sidebar({ profile, view, setView }: { profile: Profile; view: View; set
       <div className="flex items-center justify-between px-4 py-5 border-b border-gray-100">
         <div className="flex items-center gap-2">
           <svg viewBox="0 0 40 40" className="w-8 h-8">
-            <path d="M20 2L4 11v18l16 9 16-9V11L20 2z" fill="#F97316" />
+            <path d="M20 2L4 11v18l16 9 16-9V11L20 2z" fill="#F57C32" />
             <path d="M20 6L8 13v14l12 7 12-7V13L20 6z" fill="#fff" />
-            <path d="M22 12l-8 10h5l-1 8 8-10h-5l1-8z" fill="#F97316" />
+            <path d="M22 12l-8 10h5l-1 8 8-10h-5l1-8z" fill="#F57C32" />
           </svg>
-          <div className="font-extrabold text-sm">OPK <span className="text-brand-500">HARDWARE</span></div>
+          <div className="font-extrabold text-[13px] tracking-tight leading-tight">OPK <span className="text-brand-500">HARDWARE</span></div>
         </div>
         <button onClick={() => setOpen(false)} className="lg:hidden"><X className="w-4 h-4 text-gray-500" /></button>
       </div>
@@ -191,7 +228,7 @@ function Sidebar({ profile, view, setView }: { profile: Profile; view: View; set
       <div className="border-t border-gray-100 p-3">
         <div className="flex items-center gap-3 px-2 py-2">
           <div className="w-9 h-9 rounded-full bg-brand-100 flex items-center justify-center text-brand-600 font-bold text-sm">
-            {profile.full_name[0].toUpperCase()}
+            {(profile.full_name?.[0] ?? 'U').toUpperCase()}
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold text-gray-800 truncate">{profile.full_name}</p>
@@ -412,46 +449,45 @@ function POSView({ profile, products, categories, reload }: {
   );
 
   return (
-    <div className="h-[calc(100vh-3.5rem)] lg:h-screen flex overflow-hidden">
-      <div className="flex-1 min-w-0 flex flex-col">
-        <div className="px-4 lg:px-6 pt-4 lg:pt-6">
-          <div className="flex items-center gap-3">
-            <div className="relative flex-1">
-              <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search products..."
-                className="w-full h-11 pl-10 pr-4 rounded-lg border border-gray-200 bg-white text-sm" />
-            </div>
-            {profile.role === 'manager' && (
-              <button onClick={() => setAddOpen(true)} className="h-11 px-4 rounded-lg bg-brand-500 text-white text-sm font-semibold flex items-center gap-2">
-                <Plus className="w-4 h-4" /><span className="hidden sm:inline">Add</span>
-              </button>
-            )}
+    <div className="h-[calc(100vh-3.5rem)] lg:h-screen flex overflow-hidden bg-[#f2f2f2]">
+      <div className="flex-1 min-w-0 flex flex-col p-4 lg:p-5">
+        <div className="mb-3 flex items-center gap-3">
+          <div className="relative flex-1">
+            <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search products..."
+              className="w-full h-11 pl-10 pr-4 rounded-xl border border-[#e4e4e4] bg-white text-sm text-gray-700 shadow-sm focus:outline-none focus:border-brand-500" />
           </div>
-          <div className="flex gap-2 mt-3 overflow-x-auto no-scrollbar pb-1">
-            <button onClick={() => setCat('all')} className={`whitespace-nowrap px-3.5 h-8 rounded-full text-xs font-semibold border ${cat === 'all' ? 'bg-brand-500 border-brand-500 text-white' : 'bg-white border-gray-200'}`}>All</button>
-            {categories.map((c) => (
-              <button key={c.id} onClick={() => setCat(c.id)}
-                className={`whitespace-nowrap px-3.5 h-8 rounded-full text-xs font-semibold border ${cat === c.id ? 'bg-brand-500 border-brand-500 text-white' : 'bg-white border-gray-200'}`}>{c.name}</button>
-            ))}
-          </div>
+          {profile.role === 'manager' && (
+            <button onClick={() => setAddOpen(true)} className="h-11 px-4 rounded-xl bg-brand-500 text-white text-sm font-semibold flex items-center gap-2 shadow-[0_8px_18px_rgba(245,124,50,0.25)]">
+              <Plus className="w-4 h-4" /><span className="hidden sm:inline">Add</span>
+            </button>
+          )}
         </div>
 
-        <div className="flex-1 overflow-y-auto px-4 lg:px-6 py-4">
+        <div className="mb-4 flex gap-2 overflow-x-auto no-scrollbar pb-1">
+          <button onClick={() => setCat('all')} className={`whitespace-nowrap px-3.5 h-8 rounded-full text-xs font-semibold border ${cat === 'all' ? 'bg-brand-500 border-brand-500 text-white' : 'bg-white border-[#e4e4e4] text-gray-700'}`}>All</button>
+          {categories.map((c) => (
+            <button key={c.id} onClick={() => setCat(c.id)}
+              className={`whitespace-nowrap px-3.5 h-8 rounded-full text-xs font-semibold border ${cat === c.id ? 'bg-brand-500 border-brand-500 text-white' : 'bg-white border-[#e4e4e4] text-gray-700'}`}>{c.name}</button>
+          ))}
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
           {!filtered.length ? <p className="text-sm text-gray-500 text-center py-16">No products.</p> : (
             <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3 lg:gap-4">
               {filtered.map((p) => {
                 const low = Number(p.stock_quantity) <= Number(p.low_stock_threshold);
                 const out = Number(p.stock_quantity) <= 0;
                 return (
-                  <div key={p.id} className="bg-white rounded-xl border border-gray-200 p-2.5 flex flex-col">
-                    <div className="aspect-square rounded-lg bg-gray-100 flex items-center justify-center text-3xl">📦</div>
-                    <p className="text-sm font-semibold line-clamp-1 mt-2">{p.name}</p>
-                    <p className="text-xs text-brand-600 font-bold mt-0.5">{money(p.selling_price)} <span className="text-gray-400">/ {p.unit}</span></p>
+                  <div key={p.id} className="bg-white rounded-[20px] border border-[#ececec] p-2.5 flex flex-col shadow-[0_6px_18px_rgba(15,23,42,0.04)]">
+                    <div className="aspect-square rounded-xl bg-[#f5f5f5] flex items-center justify-center text-3xl">📦</div>
+                    <p className="mt-2 text-sm font-semibold line-clamp-1 text-gray-800">{p.name}</p>
+                    <p className="mt-0.5 text-xs font-bold text-brand-600">{money(p.selling_price)} <span className="text-gray-400">/ {p.unit}</span></p>
                     <div className="mt-auto pt-2 flex items-center justify-between">
                       <span className={`text-[11px] ${out ? 'text-red-500' : low ? 'text-yellow-600' : 'text-gray-500'}`}>Stock: {Number(p.stock_quantity)}</span>
                       <button onClick={() => add(p)} disabled={out}
-                        className="w-7 h-7 rounded-full bg-brand-500 disabled:bg-gray-300 text-white flex items-center justify-center">
-                        <Plus className="w-3.5 h-3.5" />
+                        className="flex h-7 w-7 items-center justify-center rounded-full bg-brand-500 text-white shadow-sm disabled:bg-gray-300">
+                        <Plus className="h-3.5 w-3.5" />
                       </button>
                     </div>
                   </div>
@@ -462,7 +498,7 @@ function POSView({ profile, products, categories, reload }: {
         </div>
       </div>
 
-      <aside className="hidden lg:flex flex-col w-80 xl:w-96 bg-white border-l border-gray-200">{CartView}</aside>
+      <aside className="hidden w-80 flex-col border-l border-[#e8e8e8] bg-[#f8f8f8] xl:w-[23rem] lg:flex">{CartView}</aside>
 
       <button onClick={() => setOpen(true)} className="lg:hidden fixed bottom-5 right-5 z-30 bg-brand-500 text-white rounded-full h-14 px-5 flex items-center gap-2 shadow-lg font-semibold">
         <ShoppingCart className="w-5 h-5" /> Cart
@@ -832,7 +868,7 @@ function SettingsView({ profile }: { profile: Profile }) {
 // APP SHELL — the whole app after login
 // ============================================================
 export default function App({ profile }: { profile: Profile }) {
-  const [view, setView] = useState<View>(profile.role === 'manager' ? 'dashboard' : 'pos');
+  const [view, setView] = useState<View>('pos');
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
 

@@ -1,4 +1,4 @@
-import { requireAuth } from '@/lib/supabase';
+import { requireAuth } from '@/lib/supabase-server';
 import App from '@/components/App';
 
 export const dynamic = 'force-dynamic';

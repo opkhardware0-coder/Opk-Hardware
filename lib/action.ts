@@ -1,8 +1,9 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { createServerSupabase, createAdminSupabase, getCurrentProfile } from './supabase';
-import type { Product } from './supabase';
+import { createServerSupabase, getCurrentProfile } from './supabase-server';
+import { createAdminSupabase } from './supabase-admin';
+import type { Product } from './supabase-client';
 
 // ---------- CREATE SALE ----------
 export async function createSale(input: {
