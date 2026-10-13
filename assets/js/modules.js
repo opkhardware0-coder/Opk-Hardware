@@ -7,13 +7,8 @@ const TITLES = {
   pos: 'Point of Sale',
   products: 'Products & Categories',
   inventory: 'Inventory',
-  customers: 'Customers',
   sales: 'Sales History',
-  suppliers: 'Suppliers',
-  purchases: 'Purchasing',
-  expenses: 'Expenses',
   reports: 'Reports',
-  staff: 'Staff & Users',
 };
 const LIVE_PAGES = Object.keys(TITLES).concat('dashboard', 'settings');
 const ctx = await mountShell({ page, title: TITLES[page] || 'OPK HARDWARES', live: LIVE_PAGES });
@@ -22,13 +17,8 @@ if (ctx) {
     pos: renderPos,
     products: renderProducts,
     inventory: renderInventory,
-    customers: renderCustomers,
     sales: renderSales,
-    suppliers: renderSuppliers,
-    purchases: renderPurchases,
-    expenses: renderExpenses,
     reports: renderReports,
-    staff: renderStaff,
   };
   await renderers[page](ctx);
 }

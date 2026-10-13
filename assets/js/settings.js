@@ -3,21 +3,14 @@ import { supabase } from './supabase.js';
 import { escapeHtml, formatDateTime } from './ui.js';
 import { getInstallState, promptInstall } from './pwa.js';
 
-const ctx = await mountShell({ page: 'settings', title: 'Settings' });
-if (ctx) renderSettings(ctx);
-
 const STAFF_EXPORT_TABLES = [
   { table: 'products', label: 'Products & inventory' },
   { table: 'sales', label: 'Sales history' },
   { table: 'sale_items', label: 'Sale line items' },
   { table: 'customers', label: 'Customers' },
   { table: 'customer_payments', label: 'Customer payments' },
-  { table: 'purchases', label: 'Purchase receipts' },
-  { table: 'purchase_items', label: 'Purchase line items' },
 ];
 const MANAGER_EXPORT_TABLES = [
-  { table: 'suppliers', label: 'Suppliers' },
-  { table: 'expenses', label: 'Expenses' },
   { table: 'inventory_movements', label: 'Inventory movements' },
 ];
 const TOUR_KEY = 'opk_tour_completed';
@@ -36,12 +29,12 @@ const TOUR_STEPS = [
   {
     selector: '.nav a[href="/pos"]',
     title: 'POS and other modules',
-    text: 'The POS and operational pages are connected to the database. The checkout transaction uses a secured database function to validate stock, pricing, payments, and customer balances.',
+    text: 'The POS and operational pages are connected to the database. Checkout validates stock, pricing, payments, and customer balances in a secured database function.',
   },
   {
     selector: '.user-chip',
     title: 'Your account and role',
-    text: 'Your name and role come from your signed-in account and profile. Role changes and staff invitations are not available from this browser app yet.',
+    text: 'Your identity and role come from your signed-in account. Owners and managers can update supported staff roles here in Settings.',
   },
   {
     selector: '#logout',
@@ -120,7 +113,7 @@ function renderSettings({ user, profile, content }) {
           <div><h3 id="tour-title">Guided Tour</h3>
             <p>Review the main POS workflow and learn how to use the system.</p></div>
         </div>
-        <p id="tour-status" class="settings-help">${localStorage.getItem(TOUR_KEY) === '1' ? 'You have completed the current workspace tour.' : 'The tour explains the dashboard, navigation, account, and what is currently available.'}</p>
+        <p id="tour-status" class="settings-help">${localStorage.getItem(TOUR_KEY) === '1' ? 'You have completed the current workspace tour.' : 'The tour explains the dashboard, POS, navigation, and account.'}</p>
         <button class="btn btn-primary" id="start-tour" type="button">Start tour</button>
       </section>
 
@@ -148,9 +141,10 @@ function renderSettings({ user, profile, content }) {
         <div class="settings-action-list">
           <div class="settings-action-row"><div><strong>Reset interface preferences</strong><small>Expand the sidebar and restore local display defaults. Keeps your sign-in and business data.</small></div><button class="btn btn-outline" id="reset-preferences" type="button">Reset preferences</button></div>
           <div class="settings-action-row"><div><strong>Replay the guided tour</strong><small>Clear this browser’s tour completion marker.</small></div><button class="btn btn-outline" id="reset-tour" type="button">Reset tour</button></div>
+          <div class="settings-action-row"><div><strong>Clear draft sale</strong><small>Remove your unsaved POS cart on this device only.</small></div><button class="btn btn-outline" id="reset-cart" type="button">Clear draft</button></div>
           <div class="settings-action-row"><div><strong>Clear cached app shell</strong><small>Removes OPK’s offline static cache only. It will be cached again when you are online.</small></div><button class="btn btn-outline" id="clear-cache" type="button">Clear cache</button></div>
         </div>
-        <p class="settings-safety-note">Completed sales, products, stock, customers, staff accounts, and database records are never cleared here. Draft-cart clearing is unavailable because this app does not yet have an implemented cart.</p>
+        <p class="settings-safety-note">Completed sales, products, stock, customers, staff accounts, and database records are never cleared here. Draft-cart clearing only removes the current user’s unsaved cart from this browser.</p>
       </section>
 
       <section class="settings-card" aria-labelledby="business-title">
@@ -175,7 +169,7 @@ function renderSettings({ user, profile, content }) {
         </div>
         <div id="users-message" role="status" aria-live="polite"></div>
         <div id="users-list" class="settings-users-list"><div class="empty">Loading staff profiles…</div></div>
-        <p class="settings-help">Inviting users, changing roles, and disabling accounts require privileged Supabase Auth operations that are not exposed to this browser app. An owner can create accounts in Supabase Authentication; new profiles default to Cashier. Do not place a service-role key in this app.</p>
+        <p class="settings-help">Admins and managers can update supported roles here. Create accounts in Supabase Authentication first; new profiles default to Cashier. Account invitations, password management, and activation require privileged Supabase Auth operations and are not exposed in this browser app.</p>
       </section>
 
       <section class="settings-card settings-guide-card" aria-labelledby="guide-title">
@@ -187,8 +181,8 @@ function renderSettings({ user, profile, content }) {
           <li>Sign in with your staff account; profile roles are read from Supabase.</li>
           <li>Use the Dashboard to view available sales, stock, and customer summary data.</li>
           <li>Download authorized product, sales, or customer data from Data Protection.</li>
-          <li>Use Supabase’s secured Auth dashboard for account creation and role assignment.</li>
-          <li>Use the POS, purchasing, inventory, expenses, and reports pages for the workflows available in this version.</li>
+          <li>Create staff accounts in Supabase Auth, then manage supported roles in Settings.</li>
+          <li>Use the POS, inventory, sales history, and reports pages for the workflows available in this version.</li>
         </ol>
       </section>
     </div>
@@ -208,7 +202,7 @@ function renderSettings({ user, profile, content }) {
   setupInstallation();
   setupTour();
   setupExports(content, exportTables);
-  setupReset();
+  setupReset(user.id);
   loadStaffProfiles({ user, profile });
 }
 
@@ -438,7 +432,7 @@ function confirmAction(title, copy, acceptText) {
   });
 }
 
-function setupReset() {
+function setupReset(userId) {
   const notice = document.getElementById('reset-message');
 
   document.getElementById('reset-preferences').addEventListener('click', async () => {
@@ -457,6 +451,16 @@ function setupReset() {
     localStorage.removeItem(TOUR_KEY);
     document.getElementById('tour-status').textContent = 'Tour progress reset. Start the tour whenever you are ready.';
     message(notice, 'Guided tour can now be replayed.', 'success');
+  });
+
+  document.getElementById('reset-cart').addEventListener('click', async () => {
+    if (!await confirmAction('Clear this draft sale?', 'This removes only your unsaved POS cart from this browser. Completed transactions and stock are unchanged.', 'Clear draft sale')) return;
+    try {
+      localStorage.removeItem(`opk_cart_${userId}`);
+      message(notice, 'Your unsaved POS cart was cleared from this browser.', 'success');
+    } catch (error) {
+      message(notice, `Could not clear the saved draft sale. ${error.message}`, 'error');
+    }
   });
 
   document.getElementById('clear-cache').addEventListener('click', async () => {
@@ -491,15 +495,56 @@ async function loadStaffProfiles({ user, profile }) {
       list.innerHTML = '<div class="empty">No staff profiles are visible to this account.</div>';
       return;
     }
-    list.innerHTML = `<div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Role</th><th>Account status</th></tr></thead><tbody>${profiles.map((row) => {
-      const own = row.id === user.id;
-      const name = row.full_name || (own ? user.email : 'Name not set');
-      return `<tr><td>${escapeHtml(name)}${own ? ' <span class="badge badge-accent">You</span>' : ''}</td><td>${escapeHtml(roleLabel(row.role))}</td><td><span class="status status-success">Profile exists</span></td></tr>`;
-    }).join('')}</tbody></table></div>`;
+    const draw = () => {
+      list.innerHTML = `<div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>Role</th><th>Account status</th><th>Role management</th></tr></thead><tbody>${profiles.map((row) => {
+        const own = row.id === user.id;
+        const name = row.full_name || (own ? user.email : 'Name not set');
+        const mayChangeRole = canManage(profile) && !own && row.role !== 'admin' && (profile.role === 'admin' || row.role === 'cashier');
+        const action = mayChangeRole
+          ? `<div class="staff-role-actions"><label class="sr-only" for="settings-role-${row.id}">Role for ${escapeHtml(name)}</label><select class="input role-select" id="settings-role-${row.id}" data-settings-role="${row.id}"><option value="cashier" ${row.role === 'cashier' ? 'selected' : ''}>Cashier</option><option value="manager" ${row.role === 'manager' ? 'selected' : ''}>Manager</option></select><button class="btn btn-outline btn-small" type="button" data-save-settings-role="${row.id}">Save</button></div>`
+          : own ? '<span class="badge badge-accent">Your account</span>' : '<span class="module-help">Owner-controlled</span>';
+        return `<tr><td><strong>${escapeHtml(name)}</strong>${own ? ' <span class="badge badge-accent">You</span>' : ''}</td><td><span class="badge badge-primary">${escapeHtml(roleLabel(row.role))}</span></td><td><span class="status status-success">Profile exists</span></td><td>${action}</td></tr>`;
+      }).join('')}</tbody></table></div>`;
+    };
+    draw();
     message(notice, `${profiles.length} profile${profiles.length === 1 ? '' : 's'} visible under current Row Level Security policies. Auth account status and email for other users are not exposed to this page.`, 'info');
+    list.addEventListener('click', async (event) => {
+      const button = event.target.closest('[data-save-settings-role]');
+      if (!button) return;
+      const row = profiles.find((item) => item.id === button.dataset.saveSettingsRole);
+      const select = list.querySelector(`[data-settings-role="${CSS.escape(button.dataset.saveSettingsRole)}"]`);
+      if (!row || !select || select.value === row.role) return;
+      if (!window.confirm(`Assign ${select.value} access to ${row.full_name || 'this staff member'}? Supabase will enforce your permissions.`)) return;
+      const idleLabel = button.textContent;
+      button.disabled = true;
+      button.textContent = 'Saving…';
+      try {
+        const { error: updateError } = await supabase.rpc('set_staff_role', {
+          p_staff_id: row.id,
+          p_role: select.value,
+        });
+        if (updateError) throw updateError;
+        row.role = select.value;
+        draw();
+        message(notice, `${row.full_name || 'Staff member'} now has ${roleLabel(row.role)} access.`, 'success');
+      } catch (updateError) {
+        message(notice, `Could not update this role. ${updateError.message}`, 'error');
+        button.disabled = false;
+        button.textContent = idleLabel;
+      }
+    });
   } catch (error) {
     const name = profile?.full_name || user.user_metadata?.full_name || 'Your account';
     list.innerHTML = `<div class="settings-user-card"><strong>${escapeHtml(name)}</strong><span>${escapeHtml(roleLabel(profile?.role))}</span><small>${escapeHtml(user.email || '')}</small></div>`;
     message(notice, `Could not load the authorized staff profile list. Showing only your signed-in profile. ${error.message}`, 'warning');
   }
+}
+
+try {
+  const ctx = await mountShell({ page: 'settings', title: 'Settings' });
+  if (ctx) renderSettings(ctx);
+} catch (error) {
+  const root = document.getElementById('app');
+  root.removeAttribute('aria-busy');
+  root.innerHTML = `<main class="content"><div class="alert alert-error" role="alert">Settings could not be opened. ${escapeHtml(error.message || 'Please reload and try again.')}</div><p><a href="/dashboard">Return to Dashboard</a></p></main>`;
 }

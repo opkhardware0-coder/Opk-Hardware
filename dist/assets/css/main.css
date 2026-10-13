@@ -208,6 +208,24 @@ a { color: var(--color-primary); }
 .user-meta strong { max-width: 190px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-text); }
 .user-meta small { margin-top: .2rem; color: var(--color-text-muted); text-transform: capitalize; }
 .content { padding: clamp(1rem, 2vw, 1.6rem); max-width: 1500px; width: 100%; margin: 0 auto; }
+.workspace-loading { min-height: 100vh; display: flex; align-items: center; justify-content: center; gap: .7rem; color: var(--color-text-muted); background: var(--color-background); font-weight: 600; }
+.dashboard-welcome { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: 0 0 1.2rem; }
+.dashboard-welcome h2 { color: var(--color-primary); font-size: clamp(1.4rem, 2.2vw, 1.9rem); letter-spacing: -.03em; }
+.dashboard-welcome p:last-child { margin: .35rem 0 0; color: var(--color-text-muted); }
+.dashboard-cards { margin-bottom: 1rem; }
+.dashboard-product-stat { display: flex; flex-direction: column; align-items: flex-start; }
+.dashboard-card-link { display: inline-flex; align-items: center; gap: .35rem; margin-top: .55rem; color: var(--color-accent-text); font-size: .8rem; font-weight: 700; text-decoration: none; }
+.dashboard-card-link:hover { color: var(--color-primary); text-decoration: underline; }
+.dashboard-panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+.dashboard-panel-heading h2 { margin-bottom: .25rem; }
+.dashboard-panel-heading p { margin: 0 0 .9rem; color: var(--color-text-muted); font-size: .82rem; }
+.sales-chart { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: clamp(.3rem, 1.5vw, 1rem); align-items: end; min-height: 210px; }
+.sales-chart-column { display: grid; grid-template-rows: 1.5rem 1fr 1.5rem; align-items: end; min-width: 0; text-align: center; }
+.sales-chart-value { overflow: hidden; color: var(--color-text-muted); font-size: clamp(.55rem, .8vw, .72rem); text-overflow: ellipsis; white-space: nowrap; }
+.sales-chart-track { height: 150px; display: flex; align-items: flex-end; overflow: hidden; border-radius: 8px 8px 3px 3px; background: #F1F4F8; }
+.sales-chart-bar { width: 100%; min-height: 0; border-radius: 7px 7px 2px 2px; background: linear-gradient(180deg, var(--color-accent), #E77A17); transition: height .3s ease; }
+.sales-chart-label { padding-top: .45rem; color: var(--color-text-muted); font-size: .72rem; white-space: nowrap; }
+.sales-chart-loading { min-height: 150px; display: flex; align-items: center; justify-content: center; gap: .7rem; color: var(--color-text-muted); }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 205px), 1fr)); gap: 1rem; }
 .stat { position: relative; min-width: 0; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--color-radius); padding: 1.15rem 1.2rem; box-shadow: var(--color-shadow); }
 .stat::before { content: ""; position: absolute; top: 1.2rem; left: 0; width: 3px; height: 28px; border-radius: 0 3px 3px 0; background: var(--color-primary); }
@@ -243,6 +261,8 @@ a { color: var(--color-primary); }
 .scrim { display: none; }
 
 .settings-heading { display: flex; justify-content: space-between; align-items: flex-end; margin: 0 0 1.2rem; }
+.workspace-content { position: relative; isolation: isolate; background: radial-gradient(ellipse at 8% 4%, rgba(242,140,40,.075), transparent 26rem), radial-gradient(ellipse at 96% 28%, rgba(11,35,69,.045), transparent 30rem); }
+.workspace-content::before { content: ""; position: absolute; z-index: -1; inset: 0; pointer-events: none; background: url("/assets/images/opk-logo.png") center 15rem / min(46vw, 560px) auto no-repeat; opacity: .075; filter: grayscale(1); mix-blend-mode: multiply; }
 .settings-eyebrow { margin: 0 0 .35rem; color: var(--color-text-muted); font-size: .72rem; font-weight: 750; letter-spacing: .1em; }
 .settings-heading h2 { display: flex; align-items: center; gap: .6rem; color: var(--color-primary); font-size: 1.65rem; font-weight: 800; letter-spacing: -.03em; }
 .settings-heading-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 11px; background: var(--color-soft-primary); color: var(--color-primary); font-size: 1.25rem; }
@@ -388,6 +408,11 @@ body.tour-active .topbar, body.tour-active .sidebar { z-index: 101; }
 }
 
 @media (max-width: 560px) {
+  .dashboard-welcome { align-items: flex-start; }
+  .sales-chart { gap: .25rem; }
+  .sales-chart-track { height: 120px; }
+  .sales-chart-value { font-size: .55rem; }
+  .sales-chart-label { font-size: .65rem; }
   .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem; }
   .stat { padding: 1rem .9rem; }
   .stat .k { font-size: .68rem; }
@@ -395,6 +420,7 @@ body.tour-active .topbar, body.tour-active .sidebar { z-index: 101; }
   .panel { margin-top: .9rem; }
   .data-table th, .data-table td { padding: .72rem .75rem; }
   .settings-grid { grid-template-columns: minmax(0, 1fr); }
+  .workspace-content::before { background-position: center 13rem; background-size: min(82vw, 420px) auto; opacity: .06; }
   .settings-users-card, .settings-guide-card { grid-column: auto; }
   .settings-card { padding: 1rem; }
   .settings-details > div { grid-template-columns: minmax(95px, .75fr) minmax(0, 1.25fr); }

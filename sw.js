@@ -1,4 +1,4 @@
-const CACHE_NAME = 'opk-pos-shell-v2';
+const CACHE_NAME = 'opk-pos-shell-v3';
 const APP_SHELL = [
   '/login.html',
   '/dashboard.html',
@@ -6,13 +6,8 @@ const APP_SHELL = [
   '/pos.html',
   '/products.html',
   '/inventory.html',
-  '/customers.html',
   '/sales.html',
-  '/suppliers.html',
-  '/purchases.html',
-  '/expenses.html',
   '/reports.html',
-  '/staff.html',
   '/assets/css/main.css',
   '/assets/js/pwa.js',
   '/assets/js/settings.js',
@@ -54,18 +49,19 @@ self.addEventListener('fetch', (event) => {
 
   if (request.mode === 'navigate') {
     event.respondWith((async () => {
-      try {
-        const response = await fetch(request);
-        if (response.ok) {
-          const cache = await caches.open(CACHE_NAME);
-          await cache.put(request, response.clone());
-        }
+      const cache = await caches.open(CACHE_NAME);
+      const cached = await cache.match(request);
+      const update = fetch(request).then(async (response) => {
+        if (response.ok) await cache.put(request, response.clone());
         return response;
+      });
+      if (cached) {
+        event.waitUntil(update.catch(() => {}));
+        return cached;
+      }
+      try {
+        return await update;
       } catch {
-        const cache = await caches.open(CACHE_NAME);
-        const cached = await cache.match(request);
-        if (cached) return cached;
-
         const pathname = url.pathname === '/' ? '/index.html' : `${url.pathname.replace(/\/$/, '')}.html`;
         return (await cache.match(pathname)) || (await cache.match('/login.html')) || Response.error();
       }

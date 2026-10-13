@@ -18,14 +18,8 @@ export async function requireAuth() {
     location.replace(`${LOGIN_PAGE}?next=${next}`);
     return { session: null, redirecting: true };
   }
-  // Verify the token with the server, not just local storage.
-  const { data, error } = await supabase.auth.getUser();
-  if (error || !data.user) {
-    await supabase.auth.signOut();
-    location.replace(LOGIN_PAGE);
-    return { session: null, redirecting: true };
-  }
-  return { session, user: data.user };
+  // The SDK restores and refreshes its persisted session; database access remains protected by RLS.
+  return { session, user: session.user };
 }
 
 export async function signIn(email, password, remember) {
