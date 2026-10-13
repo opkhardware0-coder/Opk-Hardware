@@ -39,7 +39,7 @@ for (const dir of include) copyDir(path.join(root, dir), path.join(dist, dir));
 
 // Generate a protected HTML entry point for each JavaScript-backed module.
 // A page explicitly supplied in the project root always takes precedence.
-const modulePages = ['pos', 'products', 'inventory', 'sales', 'reports', 'settings'];
+const modulePages = ['pos', 'products', 'inventory', 'sales', 'collections', 'reports', 'settings'];
 for (const p of modulePages) {
   const target = path.join(dist, `${p}.html`);
   if (fs.existsSync(target)) continue;

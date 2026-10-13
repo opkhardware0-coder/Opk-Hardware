@@ -5,10 +5,10 @@ import { escapeHtml } from './ui.js';
 const I = (d) => `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true">${d}</svg>`;
 export const NAV = [
   { id: 'dashboard', label: 'Dashboard', href: '/dashboard', icon: I('<rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/>') },
-  { id: 'pos', label: 'Point of Sale', href: '/pos', icon: I('<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 11h2M12 11h2M16 11h0M8 15h2M12 15h2M16 15h0"/>'), phase: 4 },
   { id: 'products', label: 'Products & Categories', href: '/products', icon: I('<path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/>'), phase: 3 },
   { id: 'inventory', label: 'Inventory', href: '/inventory', icon: I('<path d="M3 7h18M5 7v13h14V7M9 11h6"/><path d="M4 3h16l1 4H3z"/>'), phase: 5 },
   { id: 'sales', label: 'Sales History', href: '/sales', icon: I('<path d="M4 4h16v16H4z"/><path d="M8 9h8M8 13h8M8 17h5"/>'), phase: 4 },
+  { id: 'collections', label: 'Goods Collection', href: '/collections', icon: I('<path d="M4 4h16v16H4z"/><path d="M8 8h8M8 12h5M8 16h3"/><path d="m15 15 2 2 4-5"/>'), phase: 5 },
   { id: 'reports', label: 'Reports', href: '/reports', icon: I('<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'), phase: 5 },
   { id: 'settings', label: 'Settings', href: '/settings', icon: I('<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.900 4.900l2.100 2.100M17 17l2.100 2.100M4.900 19.100L7 17M17 7l2.100-2.100"/>'), phase: 5 },
 ];
