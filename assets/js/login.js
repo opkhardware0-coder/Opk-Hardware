@@ -40,6 +40,12 @@ function safeNext() {
   return /^\/[A-Za-z0-9\-_/]*$/.test(n) && !n.startsWith('//') && n !== '/login' ? n : '/dashboard';
 }
 
+function isRecoveryCallback() {
+  const query = new URLSearchParams(location.search);
+  const hash = new URLSearchParams(location.hash.slice(1));
+  return query.has('code') || query.get('type') === 'recovery' || hash.get('type') === 'recovery';
+}
+
 async function init() {
   if (!isConfigured) {
     showNotice('Supabase is not configured. Set SUPABASE_URL and SUPABASE_ANON_KEY (see README) and rebuild.', 'info');
@@ -47,12 +53,20 @@ async function init() {
     return;
   }
 
-  // Password recovery link lands here with a recovery event.
-  supabase.auth.onAuthStateChange((event) => { if (event === 'PASSWORD_RECOVERY') show('newpw'); });
+  let recoveryFlow = isRecoveryCallback();
+  if (recoveryFlow) show('newpw');
+
+  // Password recovery can arrive as a query-string code (PKCE) or URL hash.
+  supabase.auth.onAuthStateChange((event) => {
+    if (event === 'PASSWORD_RECOVERY') {
+      recoveryFlow = true;
+      show('newpw');
+    }
+  });
 
   await enforceSessionOnly();
   const session = await getSession();
-  if (session && !location.hash.includes('type=recovery')) location.replace(safeNext());
+  if (session && !recoveryFlow) location.replace(safeNext());
 }
 
 $('toggle-pw').addEventListener('click', () => {
