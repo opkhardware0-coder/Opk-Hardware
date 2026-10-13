@@ -1,4 +1,4 @@
-const CACHE_NAME = 'opk-pos-shell-v5';
+const CACHE_NAME = 'opk-pos-shell-v6';
 const APP_SHELL = [
   '/login.html',
   '/dashboard.html',
