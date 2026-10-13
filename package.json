@@ -1,0 +1,13 @@
+{
+  "name": "opk-hardwares-pos",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OPK HARDWARES wholesale mini POS (vanilla JS + Supabase)",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "dev": "node scripts/build.js && npx --yes serve dist -l 3000"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
