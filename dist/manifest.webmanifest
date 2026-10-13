@@ -1,0 +1,26 @@
+{
+  "id": "/",
+  "name": "OPK HARDWARES POS",
+  "short_name": "OPK POS",
+  "description": "OPK HARDWARES point of sale and business workspace.",
+  "start_url": "/dashboard",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#F4F6F8",
+  "theme_color": "#0B2345",
+  "icons": [
+    {
+      "src": "/assets/images/opk-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/assets/images/opk-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

@@ -28,7 +28,7 @@ function show(which) {
   $('newpw-form').hidden = which !== 'newpw';
   $('form-title').textContent = { login: 'Welcome back', reset: 'Reset your password', newpw: 'Choose a new password' }[which];
   $('form-sub').textContent = {
-    login: 'Sign in to the OPK HARDWARES point of sale.',
+    login: 'Sign in to your business workspace.',
     reset: "Enter your email and we'll send you a reset link.",
     newpw: 'Use at least 8 characters.',
   }[which];
@@ -53,6 +53,9 @@ async function init() {
     return;
   }
 
+  const resetRequested = new URLSearchParams(location.search).get('reset') === '1';
+  if (resetRequested) show('reset');
+
   let recoveryFlow = isRecoveryCallback();
   if (recoveryFlow) show('newpw');
 
@@ -66,7 +69,7 @@ async function init() {
 
   await enforceSessionOnly();
   const session = await getSession();
-  if (session && !recoveryFlow) location.replace(safeNext());
+  if (session && !recoveryFlow && !resetRequested) location.replace(safeNext());
 }
 
 $('toggle-pw').addEventListener('click', () => {

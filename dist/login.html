@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0B2345">
+  <title>Sign in · OPK HARDWARES</title>
+  <meta name="robots" content="noindex">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/assets/images/opk-icon-192.png">
+  <link rel="stylesheet" href="/assets/css/main.css">
+</head>
+<body>
+<main class="auth">
+  <div class="auth-frame">
+    <section class="auth-card" aria-label="Sign in to OPK HARDWARES">
+      <div class="auth-form-panel">
+        <div class="auth-brand">
+          <img class="auth-logo" src="/assets/images/opk-logo.png" alt="OPK HARDWARES logo">
+        </div>
+        <h1>OPK HARDWARES</h1>
+        <h2 class="auth-form-title" id="form-title">Welcome back</h2>
+        <p class="sub" id="form-sub">Sign in to your business workspace.</p>
+
+        <div id="notice" role="alert" hidden></div>
+
+        <form id="login-form" novalidate>
+          <div class="field">
+            <label for="email">Email address</label>
+            <input class="input" id="email" name="email" type="email" autocomplete="username" inputmode="email" placeholder="name@company.com" required>
+            <span class="field-error" id="email-err"></span>
+          </div>
+          <div class="field">
+            <label for="password">Password</label>
+            <div class="input-wrap">
+              <input class="input" id="password" name="password" type="password" autocomplete="current-password" placeholder="Enter your password" required>
+              <button type="button" class="toggle-pw" id="toggle-pw" aria-controls="password" aria-pressed="false">Show</button>
+            </div>
+            <span class="field-error" id="password-err"></span>
+          </div>
+          <div class="auth-row">
+            <label class="checkbox"><input type="checkbox" id="remember" checked> Remember me</label>
+            <button type="button" class="link-btn" id="show-reset">Forgot password?</button>
+          </div>
+          <button class="btn btn-primary btn-block" id="submit" type="submit">Sign in</button>
+        </form>
+
+        <form id="reset-form" novalidate hidden>
+          <div class="field">
+            <label for="reset-email">Email address</label>
+            <input class="input" id="reset-email" type="email" autocomplete="email" placeholder="name@company.com" required>
+            <span class="field-error" id="reset-err"></span>
+          </div>
+          <button class="btn btn-primary btn-block" id="reset-submit" type="submit">Send reset link</button>
+          <p class="auth-back"><button type="button" class="link-btn" id="back-login">Back to sign in</button></p>
+        </form>
+
+        <form id="newpw-form" novalidate hidden>
+          <div class="field">
+            <label for="new-password">New password</label>
+            <input class="input" id="new-password" type="password" autocomplete="new-password" minlength="8" placeholder="At least 8 characters" required>
+            <span class="field-error" id="newpw-err"></span>
+          </div>
+          <button class="btn btn-primary btn-block" id="newpw-submit" type="submit">Update password</button>
+        </form>
+        <p class="auth-footer">Secure staff access</p>
+      </div>
+      <div class="auth-visual">
+        <img src="/assets/images/opk-hardware-banner.png" alt="OPK HARDWARES building materials showroom featuring iron rods, roofing sheets, nails, and wheelbarrows">
+      </div>
+    </section>
+    <footer class="auth-copyright">© <span id="yr">2026</span> OPK HARDWARES. All rights reserved.</footer>
+  </div>
+</main>
+
+<script src="/assets/js/env.js"></script>
+<script type="module" src="/assets/js/pwa.js"></script>
+<script type="module" src="/assets/js/login.js"></script>
+</body>
+</html>

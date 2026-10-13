@@ -31,20 +31,27 @@ fs.mkdirSync(dist, { recursive: true });
 for (const f of fs.readdirSync(root)) {
   if (f.endsWith('.html')) fs.copyFileSync(path.join(root, f), path.join(dist, f));
 }
+for (const f of ['manifest.webmanifest', 'sw.js']) {
+  const source = path.join(root, f);
+  if (fs.existsSync(source)) fs.copyFileSync(source, path.join(dist, f));
+}
 for (const dir of include) copyDir(path.join(root, dir), path.join(dist, dir));
 
-// Auth-protected placeholder pages for modules built in later phases.
-// A real <page>.html in the repo root always wins over a generated stub.
-const stubPages = ['pos', 'products', 'inventory', 'customers', 'sales', 'suppliers', 'purchases', 'expenses', 'reports', 'staff', 'settings'];
-for (const p of stubPages) {
+// Generate a protected HTML entry point for each JavaScript-backed module.
+// A page explicitly supplied in the project root always takes precedence.
+const modulePages = ['pos', 'products', 'inventory', 'customers', 'sales', 'suppliers', 'purchases', 'expenses', 'reports', 'staff', 'settings'];
+for (const p of modulePages) {
   const target = path.join(dist, `${p}.html`);
   if (fs.existsSync(target)) continue;
   fs.writeFileSync(target, `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${p[0].toUpperCase() + p.slice(1)} · OPK HARDWARES</title><meta name="robots" content="noindex">
+<meta name="theme-color" content="#0B2345"><link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/assets/images/opk-icon-192.png">
 <link rel="stylesheet" href="/assets/css/main.css"></head>
 <body data-page="${p}"><div id="app"><div class="content"><div class="empty">Loading…</div></div></div>
-<script src="/assets/js/env.js"></script><script type="module" src="/assets/js/stub.js"></script></body></html>
+<script src="/assets/js/env.js"></script><script type="module" src="/assets/js/pwa.js"></script>
+<script type="module" src="/assets/js/stub.js"></script></body></html>
 `);
 }
 

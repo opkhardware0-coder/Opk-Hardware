@@ -18,7 +18,7 @@ export const NAV = [
   { id: 'settings', label: 'Settings', href: '/settings', icon: I('<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.900 4.900l2.100 2.100M17 17l2.100 2.100M4.900 19.100L7 17M17 7l2.100-2.100"/>'), phase: 5 },
 ];
 
-export async function mountShell({ page, title, live = [] }) {
+export async function mountShell({ page, title, live = NAV.map((n) => n.id) }) {
   const root = document.getElementById('app');
   const auth = await requireAuth();
   if (auth.redirecting) return null;
@@ -37,13 +37,15 @@ export async function mountShell({ page, title, live = [] }) {
   <div class="app ${collapsed ? 'collapsed' : ''}" id="shell">
     <aside class="sidebar" aria-label="Main navigation">
       <div class="brand">
-        <a class="logo" href="/dashboard"><span class="logo-mark" aria-hidden="true">OPK</span>
-          <span class="logo-text"><strong>OPK</strong><span>HARDWARES</span></span></a>
+        <a class="logo" href="/dashboard" aria-label="OPK HARDWARES dashboard">
+          <span class="brand-logo"><img src="/assets/images/opk-logo.png" alt=""></span>
+          <span class="logo-text"><strong>OPK</strong><span>HARDWARES</span></span>
+        </a>
         <button class="sidebar-toggle" id="collapse" aria-label="Collapse sidebar" aria-pressed="${collapsed}">&#9776;</button>
       </div>
       <ul class="nav">
         ${NAV.map((n) => `<li><a href="${n.href}" title="${n.label}" ${n.id === page ? 'aria-current="page"' : ''}>${n.icon}<span class="label">${n.label}</span>${n.phase && !live.includes(n.id) ? '<span class="soon">Soon</span>' : ''}</a></li>`).join('')}
-        <li style="margin-top:auto"><button id="logout" title="Log out"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5V3h4M16 17l5-5-5-5M21 12H9"/></svg><span class="label">Log out</span></button></li>
+        <li class="nav-logout"><button id="logout" title="Log out"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5V3h4M16 17l5-5-5-5M21 12H9"/></svg><span class="label">Log out</span></button></li>
       </ul>
     </aside>
     <div class="scrim" id="scrim"></div>

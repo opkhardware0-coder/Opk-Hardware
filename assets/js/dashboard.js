@@ -49,7 +49,7 @@ async function render(el) {
 
     const rows = recent.data || [];
     document.getElementById('recent').innerHTML = rows.length
-      ? `<table style="width:100%;border-collapse:collapse">${rows.map((r) => `<tr><td style="padding:.5rem 0;border-top:1px solid var(--border)">${escapeHtml(r.receipt_no)}</td><td style="text-align:right;border-top:1px solid var(--border)">${formatMoney(r.grand_total)}</td></tr>`).join('')}</table>`
+      ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>Receipt</th><th class="numeric">Total</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${escapeHtml(r.receipt_no)}</td><td class="numeric">${formatMoney(r.grand_total)}</td></tr>`).join('')}</tbody></table></div>`
       : '<div class="empty">No sales yet. Completed sales will appear here.</div>';
   } catch (e) {
     TILES.forEach((t) => set(t.id, '—'));

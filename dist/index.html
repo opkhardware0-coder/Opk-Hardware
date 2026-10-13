@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0B2345">
+  <title>OPK HARDWARES</title>
+  <meta name="robots" content="noindex">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/assets/images/opk-icon-192.png">
+  <link rel="stylesheet" href="/assets/css/main.css">
+</head>
+<body>
+<noscript><p style="padding:2rem">JavaScript is required. <a href="/login">Go to sign in</a></p></noscript>
+<script src="/assets/js/env.js"></script>
+<script type="module" src="/assets/js/pwa.js"></script>
+<script type="module">
+  import { getSession } from '/assets/js/auth.js';
+  const s = await getSession();
+  location.replace(s ? '/dashboard' : '/login');
+</script>
+</body>
+</html>
