@@ -21,6 +21,7 @@ create table if not exists public.products (
   cost_price numeric(12, 2) not null default 0 check (cost_price >= 0),
   retail_price numeric(12, 2) not null default 0 check (retail_price >= 0),
   wholesale_price numeric(12, 2) not null default 0 check (wholesale_price >= 0),
+  image_path text,
   stock_qty numeric(12, 3) not null default 0,
   min_stock numeric(12, 3) not null default 0 check (min_stock >= 0),
   is_active boolean not null default true,
@@ -31,7 +32,8 @@ create table if not exists public.products (
 -- CREATE TABLE IF NOT EXISTS does not add columns to an existing table.
 -- Keep this migration rerunnable when products predates this schema.
 alter table public.products
-  add column if not exists is_active boolean not null default true;
+  add column if not exists is_active boolean not null default true,
+  add column if not exists image_path text;
 
 create table if not exists public.customers (
   id uuid primary key default gen_random_uuid(),
@@ -216,9 +218,9 @@ revoke all on public.profiles, public.products, public.customers, public.sales f
 grant select on public.profiles to authenticated;
 grant update (full_name) on public.profiles to authenticated;
 grant select on public.products, public.customers to authenticated;
-grant insert (sku, name, category, unit, cost_price, retail_price, wholesale_price, min_stock, is_active)
+grant insert (sku, name, category, unit, cost_price, retail_price, wholesale_price, image_path, min_stock, is_active)
   on public.products to authenticated;
-grant update (sku, name, category, unit, cost_price, retail_price, wholesale_price, min_stock, is_active)
+grant update (sku, name, category, unit, cost_price, retail_price, wholesale_price, image_path, min_stock, is_active)
   on public.products to authenticated;
 grant insert (name, phone, email, address) on public.customers to authenticated;
 grant update (name, phone, email, address) on public.customers to authenticated;

@@ -9,7 +9,6 @@ const TITLES = {
   inventory: 'Inventory',
   sales: 'Sales History',
   reports: 'Reports',
-  collections: 'Goods Collection',
 };
 const LIVE_PAGES = Object.keys(TITLES).concat('dashboard', 'settings');
 const ctx = await mountShell({ page, title: TITLES[page] || 'OPK HARDWARES', live: LIVE_PAGES });
@@ -21,6 +20,46 @@ const money = (value) => formatMoney(Number(value || 0));
 const quantity = (value) => new Intl.NumberFormat('en-GH', { maximumFractionDigits: 3 }).format(Number(value || 0));
 const dateTime = (value) => escapeHtml(formatDateTime(value));
 const unitLabel = (value) => escapeHtml(value || 'each');
+const PRODUCT_IMAGE_BUCKET = 'product-images';
+
+function productImageUrl(path) {
+  return path ? supabase.storage.from(PRODUCT_IMAGE_BUCKET).getPublicUrl(path).data.publicUrl : '';
+}
+
+function validateProductImage(file) {
+  if (!file) return '';
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) return 'Choose a JPEG, PNG, or WebP product photo.';
+  if (file.size > 5 * 1024 * 1024) return 'Product photos must be 5 MB or smaller.';
+  return '';
+}
+
+async function uploadProductImage(file, userId) {
+  const extension = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' }[file.type];
+  const path = `${userId}/${crypto.randomUUID()}.${extension}`;
+  const { error } = await supabase.storage.from(PRODUCT_IMAGE_BUCKET).upload(path, file, {
+    cacheControl: '31536000',
+    contentType: file.type,
+    upsert: false,
+  });
+  if (error) throw error;
+  return path;
+}
+
+let activeProductPreview = null;
+
+function displayProductPreview(pathOrFile = null) {
+  const preview = byId('product-image-preview');
+  if (!preview) return;
+  if (activeProductPreview) {
+    URL.revokeObjectURL(activeProductPreview);
+    activeProductPreview = null;
+  }
+  const src = pathOrFile instanceof File
+    ? (activeProductPreview = URL.createObjectURL(pathOrFile))
+    : productImageUrl(pathOrFile);
+  preview.hidden = !src;
+  preview.src = src || '';
+}
 
 function alertMarkup(id = 'page-alert') {
   return `<div id="${id}" role="status" aria-live="polite" hidden></div>`;
@@ -124,7 +163,7 @@ async function renderProducts(context) {
   content.innerHTML = `${pageIntro('PRODUCT CATALOG', 'Products & Categories', 'Loading the catalogue…')}<section class="module-card"><div class="sales-chart-loading" role="status"><span class="spinner" aria-hidden="true"></span> Loading products…</div></section>`;
   let rows;
   try {
-    rows = await queryRows('products', 'id, sku, name, category, unit, cost_price, retail_price, wholesale_price, stock_qty, min_stock, is_active, updated_at', (q) => q.order('name').range(0, 999));
+    rows = await queryRows('products', 'id, sku, name, category, unit, cost_price, retail_price, image_path, stock_qty, min_stock, is_active, updated_at', (q) => q.order('name').range(0, 999));
   } catch (error) {
     showLoadError(content, 'Products & Categories', error);
     return;
@@ -136,7 +175,7 @@ async function renderProducts(context) {
     const missingIds = pendingCheckout.payload.p_items.map((item) => item.product_id).filter((id) => !loadedIds.has(id));
     if (missingIds.length) {
       try {
-        rows.push(...await queryRows('products', 'id, sku, name, category, unit, cost_price, retail_price, wholesale_price, stock_qty, min_stock, is_active, updated_at', (q) => q.in('id', missingIds)));
+        rows.push(...await queryRows('products', 'id, sku, name, category, unit, cost_price, retail_price, image_path, stock_qty, min_stock, is_active, updated_at', (q) => q.in('id', missingIds)));
       } catch (error) {
         showLoadError(content, 'Products & Categories', error);
         return;
@@ -145,16 +184,11 @@ async function renderProducts(context) {
   }
   const manager = canManage(profile);
   let cart = pendingCheckout?.payload?.p_items
-    ? pendingCheckout.payload.p_items.map((item) => ({
-      id: item.product_id,
-      quantity: Number(item.quantity),
-      collected: Number(pendingCheckout.payload.p_collection_items?.find((line) => line.product_id === item.product_id)?.quantity_collected ?? item.quantity),
-    }))
+    ? pendingCheckout.payload.p_items.map((item) => ({ id: item.product_id, quantity: Number(item.quantity) }))
     : readCart(user.id, rows);
   let moreProductsAvailable = rows.length === 1000;
   let customersLoaded = false;
   let customersLoading = false;
-  let priceTier = pendingCheckout?.payload?.p_price_tier === 'wholesale' ? 'wholesale' : 'retail';
   let currentPage = 0;
   let view = localStorage.getItem('opk_products_view') === 'list' ? 'list' : 'grid';
   const pageSize = 24;
@@ -179,15 +213,12 @@ async function renderProducts(context) {
     ${productCartDialog([])}`;
   if (pendingCheckout?.payload) {
     const payload = pendingCheckout.payload;
-    byId('catalog-tier').value = payload.p_price_tier;
     byId('catalog-payment').value = payload.p_payment_method;
     byId('catalog-tendered').value = String(payload.p_amount_tendered);
     byId('catalog-tendered-wrap').hidden = payload.p_payment_method === 'credit';
-    byId('catalog-collection-form').elements.expected_date.value = payload.p_expected_date || '';
-    byId('catalog-collection-form').elements.collection_notes.value = payload.p_collection_notes || '';
   }
   const activeProducts = () => rows.filter((row) => row.is_active);
-  const productPrice = (product) => Number(priceTier === 'wholesale' ? product.wholesale_price : product.retail_price);
+  const productPrice = (product) => Number(product.retail_price);
   const filteredProducts = () => {
     const needle = byId('product-search').value.trim().toLowerCase();
     const category = byId('product-category').value;
@@ -214,15 +245,15 @@ async function renderProducts(context) {
         ? `<button class="btn btn-outline btn-small" type="button" data-edit-product="${row.id}">Edit</button><button class="btn btn-outline btn-small" type="button" data-toggle-product="${row.id}">Deactivate</button>`
       : '';
     const cardMarkup = (row) => `<article class="product-card">
-      <div class="product-card-image" aria-hidden="true"><span>${escapeHtml((row.name || 'P').slice(0, 1).toUpperCase())}</span></div>
+      <div class="product-card-image">${row.image_path ? `<img src="${escapeHtml(productImageUrl(row.image_path))}" alt="${escapeHtml(row.name)}" loading="lazy">` : `<span aria-hidden="true">${escapeHtml((row.name || 'P').slice(0, 1).toUpperCase())}</span>`}</div>
       <div class="product-card-body"><div class="product-card-top"><span class="product-category">${escapeHtml(row.category || 'Uncategorized')}</span><span class="status ${Number(row.stock_qty) <= 0 ? 'status-danger' : lowStock(row) ? 'status-warning' : 'status-success'}">${Number(row.stock_qty) <= 0 ? 'Out of stock' : lowStock(row) ? 'Low stock' : 'In stock'}</span></div>
       <h3>${escapeHtml(row.name)}</h3><p class="product-card-sku">${escapeHtml(row.sku || 'No SKU')} · ${quantity(row.stock_qty)} ${unitLabel(row.unit)}</p>
-      <div class="product-card-prices"><span>Retail <strong>${money(row.retail_price)}</strong></span><span>Wholesale <strong>${money(row.wholesale_price)}</strong></span></div>
+      <div class="product-card-prices"><span>Selling price <strong>${money(row.retail_price)}</strong></span></div>
       <div class="product-card-actions"><button class="btn btn-primary btn-small" type="button" data-add-to-cart="${row.id}" ${Number(row.stock_qty) <= 0 ? 'disabled' : ''}>Add to sale</button>${actions(row)}</div></div></article>`;
     byId('products-table').innerHTML = view === 'grid'
       ? `<div class="products-grid">${visible.map(cardMarkup).join('') || '<div class="empty">No products match these filters.</div>'}</div>`
-      : tableMarkup(['Product', 'Category', 'SKU', 'Retail price', 'Wholesale price', 'Quantity', 'Status', 'Actions'],
-        visible.map((row) => `<tr><td><strong>${escapeHtml(row.name)}</strong><small class="table-subline">${unitLabel(row.unit)}</small></td><td>${escapeHtml(row.category || 'Uncategorized')}</td><td>${escapeHtml(row.sku || '—')}</td><td class="numeric">${money(row.retail_price)}</td><td class="numeric">${money(row.wholesale_price)}</td><td>${quantity(row.stock_qty)}</td><td><span class="status ${Number(row.stock_qty) <= 0 ? 'status-danger' : lowStock(row) ? 'status-warning' : 'status-success'}">${Number(row.stock_qty) <= 0 ? 'Out of stock' : lowStock(row) ? 'Low stock' : 'In stock'}</span></td><td class="module-actions"><button class="btn btn-primary btn-small" type="button" data-add-to-cart="${row.id}" ${Number(row.stock_qty) <= 0 ? 'disabled' : ''}>Add</button>${actions(row)}</td></tr>`).join('') || noRows(8, 'No products match these filters.'), 'module-table');
+      : tableMarkup(['Product', 'Category', 'SKU', 'Selling price', 'Quantity', 'Status', 'Actions'],
+        visible.map((row) => `<tr><td><strong>${escapeHtml(row.name)}</strong><small class="table-subline">${unitLabel(row.unit)}</small></td><td>${escapeHtml(row.category || 'Uncategorized')}</td><td>${escapeHtml(row.sku || '—')}</td><td class="numeric">${money(row.retail_price)}</td><td>${quantity(row.stock_qty)}</td><td><span class="status ${Number(row.stock_qty) <= 0 ? 'status-danger' : lowStock(row) ? 'status-warning' : 'status-success'}">${Number(row.stock_qty) <= 0 ? 'Out of stock' : lowStock(row) ? 'Low stock' : 'In stock'}</span></td><td class="module-actions"><button class="btn btn-primary btn-small" type="button" data-add-to-cart="${row.id}" ${Number(row.stock_qty) <= 0 ? 'disabled' : ''}>Add</button>${actions(row)}</td></tr>`).join('') || noRows(7, 'No products match these filters.'), 'module-table');
     byId('products-pagination').innerHTML = `<span>Showing ${visible.length} of ${all.length} loaded products</span>${visible.length < all.length ? '<button class="btn btn-outline btn-small" id="load-more-products" type="button">Show more</button>' : ''}${moreProductsAvailable ? '<button class="btn btn-outline btn-small" id="load-next-catalog" type="button">Load next 1,000 products</button>' : ''}`;
     byId('product-cart-count').textContent = String(cart.reduce((sum, line) => sum + Number(line.quantity), 0));
     paintCart();
@@ -231,7 +262,7 @@ async function renderProducts(context) {
       const button = event.currentTarget;
       setBusy(button, true, 'Loading…');
       try {
-        const next = await queryRows('products', 'id, sku, name, category, unit, cost_price, retail_price, wholesale_price, stock_qty, min_stock, is_active, updated_at', (q) => q.order('name').range(nextProductOffset, nextProductOffset + 999));
+        const next = await queryRows('products', 'id, sku, name, category, unit, cost_price, retail_price, image_path, stock_qty, min_stock, is_active, updated_at', (q) => q.order('name').range(nextProductOffset, nextProductOffset + 999));
         const knownIds = new Set(rows.map((row) => row.id));
         rows.push(...next.filter((row) => !knownIds.has(row.id)));
         nextProductOffset += next.length;
@@ -250,7 +281,7 @@ async function renderProducts(context) {
     const lines = cart.map((line) => {
       const product = rows.find((row) => row.id === line.id);
       if (!product) return '';
-      return `<div class="cart-line collection-cart-line"><div class="cart-line-title"><strong>${escapeHtml(product.name)}</strong><small>${money(productPrice(product))} / ${unitLabel(product.unit)}</small></div><label class="sr-only" for="catalog-qty-${product.id}">Quantity for ${escapeHtml(product.name)}</label><input class="input cart-qty" id="catalog-qty-${product.id}" data-cart-qty="${product.id}" type="number" min=".001" max="${product.stock_qty}" step=".001" value="${line.quantity}"><strong>${money(Number(line.quantity) * productPrice(product))}</strong><label class="cart-collection-field"><span>Collecting now</span><input class="input" data-collect-now="${product.id}" type="number" min="0" max="${line.quantity}" step=".001" value="${line.collected ?? line.quantity}"></label><button class="cart-remove" data-remove-product="${product.id}" type="button" aria-label="Remove ${escapeHtml(product.name)}">×</button></div>`;
+      return `<div class="cart-line"><div class="cart-line-title"><strong>${escapeHtml(product.name)}</strong><small>${money(productPrice(product))} / ${unitLabel(product.unit)}</small></div><label class="sr-only" for="catalog-qty-${product.id}">Quantity for ${escapeHtml(product.name)}</label><input class="input cart-qty" id="catalog-qty-${product.id}" data-cart-qty="${product.id}" type="number" min=".001" max="${product.stock_qty}" step=".001" value="${line.quantity}"><strong>${money(Number(line.quantity) * productPrice(product))}</strong><button class="cart-remove" data-remove-product="${product.id}" type="button" aria-label="Remove ${escapeHtml(product.name)}">×</button></div>`;
     }).join('');
     byId('catalog-cart-lines').innerHTML = lines || '<div class="empty">Your cart is empty. Add products to start a sale.</div>';
     const subtotal = cart.reduce((sum, line) => sum + Number(line.quantity) * productPrice(rows.find((row) => row.id === line.id)), 0);
@@ -263,23 +294,20 @@ async function renderProducts(context) {
   };
   function applyPendingCheckoutState() {
     if (!pendingCheckout) {
-      byId('catalog-tier').disabled = false;
       byId('catalog-customer').disabled = false;
       byId('catalog-payment').disabled = false;
       byId('catalog-tendered').disabled = false;
       byId('catalog-clear-cart').disabled = false;
-      byId('catalog-collection-form').querySelectorAll('input, button').forEach((field) => { field.disabled = false; });
       byId('catalog-complete-sale').textContent = 'Complete sale';
       return;
     }
-    byId('catalog-tier').disabled = true;
     byId('catalog-customer').disabled = true;
     byId('catalog-payment').disabled = true;
     byId('catalog-tendered').disabled = true;
     byId('catalog-clear-cart').disabled = true;
-    byId('catalog-collection-form').querySelectorAll('input, button').forEach((field) => { field.disabled = true; });
-    content.querySelectorAll('[data-add-to-cart], [data-edit-product], [data-toggle-product], [data-cart-qty], [data-collect-now], [data-remove-product]').forEach((control) => { control.disabled = true; });
-    byId('catalog-complete-sale').textContent = 'Retry previous checkout';
+    content.querySelectorAll('[data-add-to-cart], [data-edit-product], [data-toggle-product], [data-cart-qty], [data-remove-product]').forEach((control) => { control.disabled = true; });
+    byId('catalog-complete-sale').textContent = pendingCheckout.blocked ? 'Review saved checkout' : 'Retry previous checkout';
+    byId('catalog-complete-sale').disabled = pendingCheckout.blocked || !cart.length;
   }
   const resetFilters = () => { currentPage = 0; paint(); };
   content.querySelectorAll('#product-search, #product-category, #product-stock-filter, #product-sort').forEach((control) => control.addEventListener(control.id === 'product-search' ? 'input' : 'change', resetFilters));
@@ -315,8 +343,7 @@ async function renderProducts(context) {
       if (line) {
         if (Number(line.quantity) + 1 > Number(product.stock_qty)) return showAlert('page-alert', `Only ${quantity(product.stock_qty)} ${product.unit} of ${product.name} are in stock.`);
         line.quantity = Number(line.quantity) + 1;
-        if (Number(line.collected) === Number(line.quantity) - 1) line.collected = line.quantity;
-      } else cart.push({ id: product.id, quantity: 1, collected: 1 });
+      } else cart.push({ id: product.id, quantity: 1 });
       paint();
       return;
     }
@@ -334,30 +361,17 @@ async function renderProducts(context) {
   });
   byId('catalog-cart-lines').addEventListener('change', (event) => {
     const quantityInput = event.target.closest('[data-cart-qty]');
-    const collectInput = event.target.closest('[data-collect-now]');
     if (quantityInput) {
       const line = cart.find((row) => row.id === quantityInput.dataset.cartQty);
       const product = rows.find((row) => row.id === quantityInput.dataset.cartQty);
-      const previous = Number(line.quantity);
       const next = Number(quantityInput.value);
       if (!Number.isFinite(next) || next <= 0 || next > Number(product.stock_qty)) {
         quantityInput.value = line.quantity;
         showAlert('page-alert', `Enter a quantity greater than zero and no more than available stock (${quantity(product.stock_qty)}).`);
         return;
       }
-      if (Number(line.collected) === previous) line.collected = next;
-      else line.collected = Math.min(Number(line.collected), next);
       line.quantity = next;
       paint();
-    } else if (collectInput) {
-      const line = cart.find((row) => row.id === collectInput.dataset.collectNow);
-      const value = Number(collectInput.value);
-      if (!Number.isFinite(value) || value < 0 || value > Number(line.quantity)) {
-        collectInput.value = line.collected;
-        return showAlert('page-alert', `Enter a collection amount from zero to ${quantity(line.quantity)}.`);
-      }
-      line.collected = value;
-      paintCart();
     }
   });
   byId('catalog-cart-lines').addEventListener('click', (event) => {
@@ -368,10 +382,6 @@ async function renderProducts(context) {
     }
   });
   byId('product-cart-dialog').addEventListener('change', (event) => {
-    if (event.target.id === 'catalog-tier') {
-      priceTier = event.target.value;
-      paintCart();
-    }
     if (event.target.id === 'catalog-payment') {
       byId('catalog-tendered-wrap').hidden = event.target.value === 'credit';
       if (event.target.value === 'credit') byId('catalog-tendered').value = '0';
@@ -385,6 +395,13 @@ async function renderProducts(context) {
     paint();
   });
   byId('catalog-complete-sale').addEventListener('click', async (event) => {
+    if (pendingCheckout?.blocked) {
+      if (!window.confirm('Check Sales History first. If the saved sale is listed, do not retry it. Clear this old retry record only after you have checked the history.')) return;
+      localStorage.removeItem(checkoutKey(user.id));
+      pendingCheckout = null;
+      paintCart();
+      return showAlert('page-alert', 'Saved retry cleared. Review the cart and submit the sale only if Sales History confirms it was not already completed.', 'success');
+    }
     if (!cart.length) return;
     const button = event.currentTarget;
     const method = byId('catalog-payment').value;
@@ -393,20 +410,15 @@ async function renderProducts(context) {
     const total = cart.reduce((sum, line) => sum + Number(line.quantity) * productPrice(rows.find((row) => row.id === line.id)), 0);
     if (!Number.isFinite(tendered) || tendered < 0) return showAlert('page-alert', 'Enter a valid non-negative amount received.');
     if ((total > tendered || method === 'credit') && !customerId) return showAlert('page-alert', 'Select a customer when recording credit or a partial payment.');
-    const collectionItems = cart.map((line) => ({ product_id: line.id, quantity_collected: Number(line.collected ?? line.quantity) }));
-    const hasUncollected = collectionItems.some((item) => item.quantity_collected < Number(cart.find((line) => line.id === item.product_id).quantity));
-    if (!window.confirm(`Complete this ${priceTier} sale for ${money(total)}${hasUncollected ? ' and record goods awaiting collection' : ''}?`)) return;
+    if (!window.confirm(`Complete this sale for ${money(total)}?`)) return;
     const payload = {
       p_customer_id: customerId,
       p_items: cart.map(({ id, quantity: qty }) => ({ product_id: id, quantity: qty })),
-      p_price_tier: priceTier,
+      p_price_tier: 'retail',
       p_payment_method: method,
       p_amount_tendered: tendered,
-      p_collection_items: collectionItems,
-      p_expected_date: byId('catalog-collection-form').elements.expected_date.value || null,
-      p_collection_notes: byId('catalog-collection-form').elements.collection_notes.value.trim() || null,
     };
-    if (pendingCheckout && JSON.stringify(payload) !== JSON.stringify(pendingCheckout.payload)) {
+    if (pendingCheckout?.payload && JSON.stringify(payload) !== JSON.stringify(pendingCheckout.payload)) {
       return showAlert('page-alert', 'A previous checkout has an uncertain result. Reload this page to retry it safely, then verify Sales History before starting another sale.');
     }
     setBusy(button, true, 'Completing sale…');
@@ -414,7 +426,7 @@ async function renderProducts(context) {
       pendingCheckout = pendingCheckout || { request_id: crypto.randomUUID(), payload };
       localStorage.setItem(checkoutKey(user.id), JSON.stringify(pendingCheckout));
       applyPendingCheckoutState();
-      const { data, error } = await supabase.rpc('complete_sale_with_collection', {
+      const { data, error } = await supabase.rpc('complete_sale_once', {
         ...pendingCheckout.payload,
         p_request_id: pendingCheckout.request_id,
       });
@@ -442,10 +454,9 @@ async function renderProducts(context) {
       localStorage.removeItem(checkoutKey(user.id));
       pendingCheckout = null;
       byId('product-cart-dialog').close();
-      byId('catalog-collection-form').reset();
       byId('catalog-tendered').value = '0';
       paint();
-      showAlert('page-alert', `Sale ${result.receipt_no} completed. Paid ${money(result.amount_paid)}, balance ${money(result.balance_due)}, change ${money(result.change_due)}. Collection: ${result.collection_status}.`, 'success');
+      showAlert('page-alert', `Sale ${result.receipt_no} completed. Paid ${money(result.amount_paid)}, balance ${money(result.balance_due)}, change ${money(result.change_due)}.`, 'success');
       toast(`Sale ${result.receipt_no} completed.`, 'success');
       if (stockRefreshError) toast(`Sale completed, but current stock could not be refreshed. Reload before starting another sale. ${stockRefreshError.message}`, 'error');
       setBusy(button, false);
@@ -457,6 +468,17 @@ async function renderProducts(context) {
   });
   if (manager) {
     byId('add-product').addEventListener('click', () => openProductDialog());
+    byId('product-form').elements.image.addEventListener('change', (event) => {
+      const file = event.currentTarget.files?.[0] || null;
+      const imageError = validateProductImage(file);
+      if (imageError) {
+        event.currentTarget.value = '';
+        const current = rows.find((row) => row.id === inputValue(byId('product-form'), 'id'));
+        displayProductPreview(current?.image_path || null);
+        return showAlert('page-alert', imageError);
+      }
+      displayProductPreview(file);
+    });
     byId('product-form').addEventListener('submit', async (event) => {
       event.preventDefault();
       const form = event.currentTarget;
@@ -468,38 +490,62 @@ async function renderProducts(context) {
         unit: inputValue(form, 'unit') || 'each',
         cost_price: Number(inputValue(form, 'cost_price')),
         retail_price: Number(inputValue(form, 'retail_price')),
-        wholesale_price: Number(inputValue(form, 'wholesale_price')),
         min_stock: Number(inputValue(form, 'min_stock')),
       };
       const initialStock = Number(inputValue(form, 'stock_qty'));
+      const imageFile = form.elements.image.files?.[0] || null;
+      const imageError = validateProductImage(imageFile);
+      if (imageError) return showAlert('page-alert', imageError);
       if (!record.name || Object.values(record).some((value) => typeof value === 'number' && (!Number.isFinite(value) || value < 0)) || !Number.isFinite(initialStock) || initialStock < 0) {
         return showAlert('page-alert', 'Enter a product name and valid non-negative prices, stock, and minimum stock.');
       }
       setBusy(button, true);
+      let uploadedImagePath = null;
       try {
         const id = inputValue(form, 'id');
+        const previous = id ? rows.find((row) => row.id === id) : null;
+        const imagePath = imageFile ? await uploadProductImage(imageFile, user.id) : previous?.image_path || null;
+        if (imageFile) uploadedImagePath = imagePath;
+        record.image_path = imagePath;
         let saved;
         if (id) {
-          const { data, error } = await supabase.from('products').update(record).eq('id', id).select('id, sku, name, category, unit, cost_price, retail_price, wholesale_price, stock_qty, min_stock, is_active, updated_at').single();
+          const { data, error } = await supabase.from('products').update(record).eq('id', id).select('id, sku, name, category, unit, cost_price, retail_price, image_path, stock_qty, min_stock, is_active, updated_at').single();
           if (error) throw error;
           saved = data;
         } else {
           const { data, error } = await supabase.rpc('create_product_with_stock', {
             p_sku: record.sku, p_name: record.name, p_category: record.category, p_unit: record.unit,
             p_cost_price: record.cost_price, p_retail_price: record.retail_price,
-            p_wholesale_price: record.wholesale_price, p_initial_stock: initialStock, p_min_stock: record.min_stock,
+            p_wholesale_price: record.retail_price, p_initial_stock: initialStock, p_min_stock: record.min_stock,
+            p_image_path: imagePath,
           });
           if (error) throw error;
           saved = Array.isArray(data) ? data[0] : data;
         }
+        if (id && previous?.image_path && imagePath !== previous.image_path) {
+          try {
+            const { error } = await supabase.storage.from(PRODUCT_IMAGE_BUCKET).remove([previous.image_path]);
+            if (error) toast(`Product saved, but its previous photo could not be removed. ${error.message}`, 'error');
+          } catch (error) {
+            toast(`Product saved, but its previous photo could not be removed. ${error.message}`, 'error');
+          }
+        }
         if (id) rows.splice(rows.findIndex((row) => row.id === id), 1, saved);
         else rows.push(saved);
         form.reset();
+        displayProductPreview();
         byId('product-dialog').close();
         syncCategoryOptions();
         paint();
         toast(id ? 'Product updated.' : 'Product added to the catalogue.', 'success');
       } catch (error) {
+        if (uploadedImagePath) {
+          const { error: cleanupError } = await supabase.storage.from(PRODUCT_IMAGE_BUCKET).remove([uploadedImagePath]);
+          if (cleanupError) {
+            showAlert('page-alert', `Could not save product. ${error.message} The uploaded photo could not be cleaned up: ${cleanupError.message}`);
+            return;
+          }
+        }
         showAlert('page-alert', `Could not save product. ${error.message}`);
       } finally {
         setBusy(button, false);
@@ -567,7 +613,7 @@ function productDialog() {
   return `<dialog class="app-dialog" id="product-dialog"><form id="product-form" class="app-dialog-form">
     <input type="hidden" name="id">
     <div class="dialog-heading"><h3 id="product-dialog-title">Add product</h3><button type="button" class="dialog-close" data-close="product-dialog" aria-label="Close">×</button></div>
-    <p class="module-help">Starting stock is recorded as an auditable inventory movement. Product images, descriptions, and barcodes are not fields in the current database schema.</p>
+    <p class="module-help">Starting stock is recorded as an auditable inventory movement. Product photos are optional (JPEG, PNG, or WebP; up to 5 MB).</p>
     <div class="form-grid">
       <label class="field"><span>Product name</span><input class="input" name="name" required maxlength="160"></label>
       <label class="field"><span>SKU / code</span><input class="input" name="sku" maxlength="80"></label>
@@ -575,7 +621,7 @@ function productDialog() {
       <label class="field"><span>Unit</span><input class="input" name="unit" value="each" list="product-units" required maxlength="40"><datalist id="product-units"><option value="bag"><option value="piece"><option value="length"><option value="bundle"><option value="sheet"><option value="box"><option value="each"></datalist></label>
       <label class="field"><span>Cost price (GHS)</span><input class="input" name="cost_price" type="number" min="0" step=".01" value="0" required></label>
       <label class="field"><span>Retail price (GHS)</span><input class="input" name="retail_price" type="number" min="0" step=".01" value="0" required></label>
-      <label class="field"><span>Wholesale price (GHS)</span><input class="input" name="wholesale_price" type="number" min="0" step=".01" value="0" required></label>
+      <label class="field"><span>Product photo (optional)</span><input class="input" name="image" type="file" accept="image/jpeg,image/png,image/webp"><img id="product-image-preview" class="product-image-preview" alt="Product photo preview" hidden></label>
       <label class="field"><span>Starting stock</span><input class="input" name="stock_qty" type="number" min="0" step=".001" value="0" required></label>
       <label class="field"><span>Low-stock threshold</span><input class="input" name="min_stock" type="number" min="0" step=".001" value="0" required></label>
     </div>
@@ -597,18 +643,13 @@ function productCartDialog(customers) {
   return `<dialog class="app-dialog product-cart-dialog" id="product-cart-dialog">
     <div class="dialog-heading"><div><h3>Sale cart</h3><p class="module-help">Stock is deducted only after the sale is successfully completed.</p></div><button class="dialog-close" type="button" data-close="product-cart-dialog" aria-label="Close">×</button></div>
     ${alertMarkup('catalog-alert')}
-    <div class="catalog-cart-controls"><label class="field"><span>Price tier</span><select class="input" id="catalog-tier"><option value="retail">Retail</option><option value="wholesale">Wholesale</option></select></label>
-      <label class="field"><span>Customer (required for a balance due)</span><select class="input" id="catalog-customer"><option value="">Walk-in customer</option>${customers.map((row) => `<option value="${row.id}">${escapeHtml(row.name)}${Number(row.balance) > 0 ? ` · owing ${money(row.balance)}` : ''}</option>`).join('')}</select></label>
+    <div class="catalog-cart-controls"><label class="field"><span>Customer (required for a balance due)</span><select class="input" id="catalog-customer"><option value="">Walk-in customer</option>${customers.map((row) => `<option value="${row.id}">${escapeHtml(row.name)}${Number(row.balance) > 0 ? ` · owing ${money(row.balance)}` : ''}</option>`).join('')}</select></label>
       <label class="field"><span>Payment method</span><select class="input" id="catalog-payment"><option value="cash">Cash</option><option value="mobile_money">Mobile money</option><option value="card">Card</option><option value="bank_transfer">Bank transfer</option><option value="credit">Credit (no payment today)</option></select></label>
       <label class="field" id="catalog-tendered-wrap"><span>Amount received (GHS)</span><input class="input" id="catalog-tendered" type="number" min="0" step=".01" value="0"></label>
     </div>
-    <form id="catalog-collection-form">
-      <div id="catalog-cart-lines"></div>
-      <div class="form-grid catalog-collection-extra"><label class="field"><span>Expected collection date (optional)</span><input class="input" name="expected_date" type="date"></label><label class="field"><span>Collection notes (optional)</span><input class="input" name="collection_notes" maxlength="500"></label></div>
-    </form>
+    <div id="catalog-cart-lines"></div>
     <div class="pos-total-row"><span>Subtotal</span><strong id="catalog-cart-total">${money(0)}</strong></div>
     <div class="pos-total-row"><span>Estimated balance due</span><strong id="catalog-cart-due">${money(0)}</strong></div>
-    <p class="module-help">Set “Collecting now” to less than the sold quantity to track customer goods collection separately from payment. All sold units are reserved from stock immediately.</p>
     <div class="dialog-actions"><button class="btn btn-outline" id="catalog-clear-cart" type="button">Clear cart</button><button class="btn btn-primary" id="catalog-complete-sale" type="button">Complete sale</button></div>
   </dialog>`;
 }
@@ -616,9 +657,10 @@ function productCartDialog(customers) {
 function openProductDialog(product = null) {
   const form = byId('product-form');
   form.reset();
+  displayProductPreview(product?.image_path || null);
   form.elements.id.value = product?.id || '';
-  for (const field of ['name', 'sku', 'category', 'unit', 'cost_price', 'retail_price', 'wholesale_price', 'stock_qty', 'min_stock']) {
-    const fallback = ['cost_price', 'retail_price', 'wholesale_price', 'stock_qty', 'min_stock'].includes(field) ? '0' : field === 'unit' ? 'each' : '';
+  for (const field of ['name', 'sku', 'category', 'unit', 'cost_price', 'retail_price', 'stock_qty', 'min_stock']) {
+    const fallback = ['cost_price', 'retail_price', 'stock_qty', 'min_stock'].includes(field) ? '0' : field === 'unit' ? 'each' : '';
     form.elements[field].value = product?.[field] ?? fallback;
   }
   form.elements.stock_qty.disabled = Boolean(product);
@@ -887,7 +929,13 @@ function readCheckoutAttempt(userId) {
   if (!raw) return null;
   try {
     const attempt = JSON.parse(raw);
-    if (attempt && typeof attempt.request_id === 'string' && attempt.payload?.p_items && attempt.payload?.p_collection_items) return attempt;
+    if (attempt && typeof attempt.request_id === 'string' && Array.isArray(attempt.payload?.p_items)) {
+      if ('p_collection_items' in attempt.payload) {
+        toast('A checkout saved by the previous goods-collection workflow needs review. Check Sales History before clearing or retrying it.', 'error');
+        return { request_id: attempt.request_id, payload: null, blocked: true };
+      }
+      return attempt;
+    }
   } catch {
     toast('A saved checkout could not be read. Check Sales History before starting another sale.', 'error');
     return { request_id: '', payload: null };
@@ -943,7 +991,7 @@ async function renderPos({ content, user }) {
   let customers;
   try {
     [products, customers] = await Promise.all([
-      queryRows('products', 'id, sku, name, category, unit, retail_price, wholesale_price, stock_qty', (q) => q.eq('is_active', true).gt('stock_qty', 0).order('name').limit(1000)),
+      queryRows('products', 'id, sku, name, category, unit, retail_price, stock_qty', (q) => q.eq('is_active', true).gt('stock_qty', 0).order('name').limit(1000)),
       queryRows('customers', 'id, name, phone, balance', (q) => q.order('name').limit(1000)),
     ]);
   } catch (error) {
@@ -951,14 +999,14 @@ async function renderPos({ content, user }) {
     return;
   }
   let cart = readCart(user.id, products);
-  let tier = 'retail';
-  content.innerHTML = `${pageIntro('COUNTER CHECKOUT', 'Point of Sale', 'Search products, build a cart, select a price tier, and securely complete the transaction.')}<p class="module-permission-note">Checkout currently records items at retail or wholesale price with no tax or discount. Only cash can include change. Any unpaid amount requires a customer. Stock is deducted atomically by Supabase after successful checkout.</p>${alertMarkup()}<div class="pos-layout"><section class="module-card pos-catalog"><div class="pos-controls"><label class="field"><span>Search products</span><input class="input" id="pos-search" type="search" placeholder="Product name or SKU"></label><label class="field"><span>Price tier</span><select class="input" id="pos-tier"><option value="retail">Retail</option><option value="wholesale">Wholesale</option></select></label></div><div id="pos-products" class="pos-products"></div></section><section class="module-card pos-cart"><div class="pos-cart-heading"><h3>Current sale</h3><button class="btn btn-outline btn-small" id="clear-cart" type="button">Clear cart</button></div><div id="cart-lines"></div><div class="pos-checkout"><label class="field"><span>Customer (required for balance due)</span><select class="input" id="pos-customer"><option value="">Walk-in customer</option>${customers.map((row) => `<option value="${row.id}">${escapeHtml(row.name)}${Number(row.balance) > 0 ? ` · owing ${money(row.balance)}` : ''}</option>`).join('')}</select></label><label class="field"><span>Payment method</span><select class="input" id="pos-payment"><option value="cash">Cash</option><option value="mobile_money">Mobile money</option><option value="card">Card</option><option value="bank_transfer">Bank transfer</option><option value="credit">Credit (no payment today)</option></select></label><label class="field" id="tendered-wrap"><span>Amount received (GHS)</span><input class="input" id="pos-tendered" type="number" min="0" step=".01" value="0"></label><div class="pos-total-row"><span>Subtotal</span><strong id="cart-subtotal">GH₵0.00</strong></div><div class="pos-total-row"><span>Estimated balance due</span><strong id="cart-due">GH₵0.00</strong></div><button class="btn btn-primary btn-block pos-checkout-button" id="complete-sale" type="button">Complete sale</button></div></section></div>`;
+  const tier = 'retail';
+  content.innerHTML = `${pageIntro('COUNTER CHECKOUT', 'Point of Sale', 'Search products and securely complete a sale.')}<p class="module-permission-note">Sales use the product selling price. Only cash can include change. Any unpaid amount requires a customer. Stock is deducted atomically by Supabase after successful checkout.</p>${alertMarkup()}<div class="pos-layout"><section class="module-card pos-catalog"><div class="pos-controls"><label class="field"><span>Search products</span><input class="input" id="pos-search" type="search" placeholder="Product name or SKU"></label></div><div id="pos-products" class="pos-products"></div></section><section class="module-card pos-cart"><div class="pos-cart-heading"><h3>Current sale</h3><button class="btn btn-outline btn-small" id="clear-cart" type="button">Clear cart</button></div><div id="cart-lines"></div><div class="pos-checkout"><label class="field"><span>Customer (required for balance due)</span><select class="input" id="pos-customer"><option value="">Walk-in customer</option>${customers.map((row) => `<option value="${row.id}">${escapeHtml(row.name)}${Number(row.balance) > 0 ? ` · owing ${money(row.balance)}` : ''}</option>`).join('')}</select></label><label class="field"><span>Payment method</span><select class="input" id="pos-payment"><option value="cash">Cash</option><option value="mobile_money">Mobile money</option><option value="card">Card</option><option value="bank_transfer">Bank transfer</option><option value="credit">Credit (no payment today)</option></select></label><label class="field" id="tendered-wrap"><span>Amount received (GHS)</span><input class="input" id="pos-tendered" type="number" min="0" step=".01" value="0"></label><div class="pos-total-row"><span>Subtotal</span><strong id="cart-subtotal">GH₵0.00</strong></div><div class="pos-total-row"><span>Estimated balance due</span><strong id="cart-due">GH₵0.00</strong></div><button class="btn btn-primary btn-block pos-checkout-button" id="complete-sale" type="button">Complete sale</button></div></section></div>`;
 
   const paintProducts = (filter = '') => {
     const needle = filter.toLowerCase();
     const found = products.filter((row) => `${row.name} ${row.sku || ''} ${row.category || ''}`.toLowerCase().includes(needle));
     byId('pos-products').innerHTML = found.map((row) => {
-      const price = tier === 'wholesale' ? row.wholesale_price : row.retail_price;
+      const price = row.retail_price;
       return `<button class="pos-product" type="button" data-add-product="${row.id}" ${Number(row.stock_qty) <= 0 ? 'disabled' : ''}><strong>${escapeHtml(row.name)}</strong><span>${escapeHtml(row.sku || row.category || '')}</span><b>${money(price)}</b><small>${quantity(row.stock_qty)} ${unitLabel(row.unit)} available</small></button>`;
     }).join('') || '<div class="empty">No in-stock products match your search.</div>';
   };
@@ -967,12 +1015,12 @@ async function renderPos({ content, user }) {
     writeCart(user.id, cart);
     const lines = cart.map((line) => {
       const product = products.find((row) => row.id === line.id);
-      return `<div class="cart-line"><div class="cart-line-title"><strong>${escapeHtml(product.name)}</strong><small>${money(tier === 'wholesale' ? product.wholesale_price : product.retail_price)} / ${unitLabel(product.unit)}</small></div><label class="sr-only" for="qty-${product.id}">Quantity for ${escapeHtml(product.name)}</label><input class="input cart-qty" id="qty-${product.id}" data-cart-qty="${product.id}" type="number" min=".001" max="${product.stock_qty}" step=".001" value="${line.quantity}"><strong>${money(Number(line.quantity) * Number(tier === 'wholesale' ? product.wholesale_price : product.retail_price))}</strong><button class="cart-remove" data-remove-product="${product.id}" type="button" aria-label="Remove ${escapeHtml(product.name)}">×</button></div>`;
+      return `<div class="cart-line"><div class="cart-line-title"><strong>${escapeHtml(product.name)}</strong><small>${money(product.retail_price)} / ${unitLabel(product.unit)}</small></div><label class="sr-only" for="qty-${product.id}">Quantity for ${escapeHtml(product.name)}</label><input class="input cart-qty" id="qty-${product.id}" data-cart-qty="${product.id}" type="number" min=".001" max="${product.stock_qty}" step=".001" value="${line.quantity}"><strong>${money(Number(line.quantity) * Number(product.retail_price))}</strong><button class="cart-remove" data-remove-product="${product.id}" type="button" aria-label="Remove ${escapeHtml(product.name)}">×</button></div>`;
     }).join('');
     byId('cart-lines').innerHTML = lines || '<div class="empty">Add products to this sale.</div>';
     const subtotal = cart.reduce((sum, line) => {
       const product = products.find((row) => row.id === line.id);
-      return sum + Number(line.quantity) * Number(tier === 'wholesale' ? product.wholesale_price : product.retail_price);
+      return sum + Number(line.quantity) * Number(product.retail_price);
     }, 0);
     const paid = Number(byId('pos-tendered').value || 0);
     byId('cart-subtotal').textContent = money(subtotal);
@@ -998,7 +1046,6 @@ async function renderPos({ content, user }) {
   paintProducts();
   paintCart();
   byId('pos-search').addEventListener('input', (event) => paintProducts(event.target.value));
-  byId('pos-tier').addEventListener('change', (event) => { tier = event.target.value; paintProducts(byId('pos-search').value); paintCart(); });
   byId('pos-products').addEventListener('click', (event) => {
     const button = event.target.closest('[data-add-product]');
     if (!button) return;
@@ -1032,7 +1079,7 @@ async function renderPos({ content, user }) {
     if (!Number.isFinite(tendered) || tendered < 0) return showAlert('page-alert', 'Enter a valid non-negative amount received.');
     const clientTotal = cart.reduce((sum, line) => {
       const product = products.find((row) => row.id === line.id);
-      return sum + Number(line.quantity) * Number(tier === 'wholesale' ? product.wholesale_price : product.retail_price);
+      return sum + Number(line.quantity) * Number(product.retail_price);
     }, 0);
     if ((clientTotal > tendered || method === 'credit') && !customer) return showAlert('page-alert', 'Select a customer when recording credit or a partial payment.');
     if (method === 'credit' && tendered !== 0) return showAlert('page-alert', 'Credit sales must have zero amount received.');
@@ -1043,7 +1090,7 @@ async function renderPos({ content, user }) {
       const { data, error } = await supabase.rpc('complete_sale', {
         p_customer_id: customer,
         p_items: cart.map(({ id, quantity: qty }) => ({ product_id: id, quantity: qty })),
-        p_price_tier: tier,
+        p_price_tier: 'retail',
         p_payment_method: method,
         p_amount_tendered: tendered,
       });
@@ -1162,147 +1209,14 @@ async function renderSales({ content, profile }) {
 
 async function showSaleDetail(id, customerNames, sale = null, staffNames = new Map()) {
   try {
-    const items = await queryRows('sale_items', 'product_name, sku, quantity, unit_price, price_tier, line_total', (q) => q.eq('sale_id', id).order('created_at'));
+    const items = await queryRows('sale_items', 'product_name, sku, quantity, unit_price, line_total', (q) => q.eq('sale_id', id).order('created_at'));
     const receiptSummary = sale ? `<div class="cards sales-summary-cards"><article class="stat"><div class="k">Receipt</div><div class="v">${escapeHtml(sale.receipt_no)}</div><div class="n">${dateTime(sale.created_at)}</div></article><article class="stat"><div class="k">Cashier</div><div class="v">${escapeHtml(staffNames.get(sale.created_by) || 'Staff')}</div><div class="n">${escapeHtml(customerNames.get(sale.customer_id) || 'Walk-in customer')}</div></article><article class="stat"><div class="k">Subtotal</div><div class="v">${money(sale.subtotal)}</div></article><article class="stat"><div class="k">Discount / tax</div><div class="v">${money(sale.discount)} / ${money(sale.tax)}</div></article><article class="stat"><div class="k">Total / paid</div><div class="v">${money(sale.grand_total)} / ${money(sale.amount_paid)}</div></article><article class="stat"><div class="k">Sale-time balance</div><div class="v">${money(Math.max(0, Number(sale.grand_total) - Number(sale.amount_paid)))}</div><div class="n">Payment method: ${escapeHtml(sale.payment_method.replace('_', ' '))}</div></article></div><p class="module-help">Payment amounts are the values stored on the sale. Customer payments are not linked to individual receipts in the current database.</p>` : '';
-    byId('sale-detail').innerHTML = `<section class="module-card">${receiptSummary}<div class="module-section-heading"><h3 class="module-section-title">Receipt items</h3><button class="btn btn-outline btn-small" id="close-sale-detail">Close</button></div>${tableMarkup(['Product', 'SKU', 'Tier', 'Quantity', 'Unit price', 'Line total'], items.map((item) => `<tr><td>${escapeHtml(item.product_name)}</td><td>${escapeHtml(item.sku || '—')}</td><td>${escapeHtml(item.price_tier)}</td><td>${quantity(item.quantity)}</td><td>${money(item.unit_price)}</td><td>${money(item.line_total)}</td></tr>`).join('') || noRows(6, 'No line details are available for this sale.'))}</section>`;
+    byId('sale-detail').innerHTML = `<section class="module-card">${receiptSummary}<div class="module-section-heading"><h3 class="module-section-title">Receipt items</h3><button class="btn btn-outline btn-small" id="close-sale-detail">Close</button></div>${tableMarkup(['Product', 'SKU', 'Quantity', 'Unit price', 'Line total'], items.map((item) => `<tr><td>${escapeHtml(item.product_name)}</td><td>${escapeHtml(item.sku || '—')}</td><td>${quantity(item.quantity)}</td><td>${money(item.unit_price)}</td><td>${money(item.line_total)}</td></tr>`).join('') || noRows(5, 'No line details are available for this sale.'))}</section>`;
     byId('sale-detail').scrollIntoView({ behavior: 'smooth', block: 'start' });
     byId('close-sale-detail').addEventListener('click', () => { byId('sale-detail').replaceChildren(); });
   } catch (error) {
     showAlert('page-alert', `Could not load receipt items. ${error.message}`);
   }
-}
-
-async function renderCollections({ content, user }) {
-  content.innerHTML = `${pageIntro('CUSTOMER GOODS', 'Goods Collection', 'Loading sale and pickup records…')}<section class="module-card"><div class="sales-chart-loading" role="status"><span class="spinner" aria-hidden="true"></span> Loading collection records…</div></section>`;
-
-  let orders;
-  let items;
-  let events;
-  let sales;
-  let customers;
-  try {
-    [orders, items, events, sales, customers] = await Promise.all([
-      queryRows('goods_collection_orders', 'id, sale_id, customer_id, recorded_by_name, status, expected_date, notes, created_at, completed_at', (q) => q.order('created_at', { ascending: false }).limit(1000)),
-      queryRows('goods_collection_items', 'id, order_id, sale_item_id, product_name, sku, unit, quantity_sold, quantity_collected', (q) => q.order('created_at').limit(5000)),
-      queryRows('goods_collection_events', 'id, order_id, item_id, sale_id, product_name, customer_id, quantity, collected_by_name, notes, created_at', (q) => q.order('created_at', { ascending: false }).limit(1000)),
-      queryRows('sales', 'id, receipt_no, created_at, customer_id', (q) => q.order('created_at', { ascending: false }).limit(1000)),
-      queryRows('customers', 'id, name, phone'),
-    ]);
-  } catch (error) {
-    showLoadError(content, 'Goods Collection', error);
-    return;
-  }
-
-  const saleById = new Map(sales.map((row) => [row.id, row]));
-  const customerById = new Map(customers.map((row) => [row.id, row]));
-  const itemsByOrder = new Map();
-  for (const item of items) {
-    const group = itemsByOrder.get(item.order_id) || [];
-    group.push(item);
-    itemsByOrder.set(item.order_id, group);
-  }
-  const draw = () => {
-    const search = byId('collection-search').value.trim().toLowerCase();
-    const status = byId('collection-status').value;
-    const from = byId('collection-from').value;
-    const to = byId('collection-to').value;
-    const matchedOrders = orders.filter((order) => {
-      const sale = saleById.get(order.sale_id);
-      const customer = customerById.get(order.customer_id);
-      const orderItems = itemsByOrder.get(order.id) || [];
-      const remaining = orderItems.reduce((sum, item) => sum + Number(item.quantity_sold) - Number(item.quantity_collected), 0);
-      const actualStatus = remaining <= 0 ? 'completed' : orderItems.some((item) => Number(item.quantity_collected) > 0) ? 'partial' : 'pending';
-      const day = sale ? businessDay(sale.created_at) : businessDay(order.created_at);
-      const searchable = `${sale?.receipt_no || ''} ${customer?.name || ''} ${customer?.phone || ''} ${orderItems.map((item) => item.product_name).join(' ')}`.toLowerCase();
-      return (!search || searchable.includes(search))
-        && (!status || status === 'open' ? !status || remaining > 0 : actualStatus === status)
-        && (!from || day >= from) && (!to || day <= to);
-    });
-    const openLines = matchedOrders.flatMap((order) => (itemsByOrder.get(order.id) || []).filter((item) => Number(item.quantity_sold) > Number(item.quantity_collected)));
-    byId('collection-summary').innerHTML = `<div class="cards sales-summary-cards"><article class="stat"><div class="k">Open product lines</div><div class="v">${openLines.length}</div></article><article class="stat"><div class="k">Orders awaiting collection</div><div class="v">${matchedOrders.filter((order) => order.status !== 'completed').length}</div></article><article class="stat"><div class="k">Orders in view</div><div class="v">${matchedOrders.length}</div></article></div>`;
-    byId('collection-table').innerHTML = tableMarkup(['Customer', 'Receipt / sale time', 'Product', 'Sold', 'Collected', 'Remaining', 'Collection status', 'Action'],
-      matchedOrders.flatMap((order) => {
-        const sale = saleById.get(order.sale_id);
-        const customer = customerById.get(order.customer_id);
-        const orderItems = itemsByOrder.get(order.id) || [];
-        const remainingOrder = orderItems.reduce((sum, item) => sum + Number(item.quantity_sold) - Number(item.quantity_collected), 0);
-        const state = remainingOrder <= 0 ? 'completed' : orderItems.some((item) => Number(item.quantity_collected) > 0) ? 'partial' : 'pending';
-        return orderItems.map((item) => {
-          const remaining = Number(item.quantity_sold) - Number(item.quantity_collected);
-          const action = remaining > 0
-            ? `<button class="btn btn-primary btn-small" type="button" data-record-collection="${item.id}">Record pickup</button>`
-            : '<span class="module-help">Collected</span>';
-          return `<tr><td><strong>${escapeHtml(customer?.name || 'Walk-in customer')}</strong>${customer?.phone ? `<small class="table-subline">${escapeHtml(customer.phone)}</small>` : ''}</td><td><a href="/sales?sale=${encodeURIComponent(order.sale_id)}">${escapeHtml(sale?.receipt_no || 'Sale')} · ${dateTime(sale?.created_at || order.created_at)}</a></td><td>${escapeHtml(item.product_name)}</td><td>${quantity(item.quantity_sold)} ${unitLabel(item.unit)}</td><td>${quantity(item.quantity_collected)} ${unitLabel(item.unit)}</td><td class="numeric collection-remaining">${quantity(remaining)} ${unitLabel(item.unit)}</td><td><span class="status ${state === 'completed' ? 'status-success' : state === 'partial' ? 'status-warning' : 'status-danger'}">${state === 'completed' ? 'Fully collected' : state === 'partial' ? 'Partially collected' : 'Awaiting pickup'}</span></td><td class="module-actions">${action}<button class="btn btn-outline btn-small" type="button" data-collection-history="${order.id}">History</button></td></tr>`;
-        });
-      }).join('') || noRows(8, 'No collection orders match these filters.'));
-    const matchingIds = new Set(matchedOrders.map((order) => order.id));
-    const visibleEvents = events.filter((event) => matchingIds.has(event.order_id)).slice(0, 100);
-    byId('collection-events').innerHTML = tableMarkup(['Collected at (Ghana time)', 'Receipt', 'Customer', 'Product', 'Quantity', 'Staff', 'Notes'],
-      visibleEvents.map((event) => {
-        const sale = saleById.get(event.sale_id);
-        const customer = customerById.get(event.customer_id);
-        const unit = (itemsByOrder.get(event.order_id) || []).find((item) => item.id === event.item_id)?.unit || 'each';
-        return `<tr><td>${dateTime(event.created_at)}</td><td>${escapeHtml(sale?.receipt_no || 'Sale')}</td><td>${escapeHtml(customer?.name || 'Walk-in customer')}</td><td>${escapeHtml(event.product_name)}</td><td>${quantity(event.quantity)} ${unitLabel(unit)}</td><td>${escapeHtml(event.collected_by_name)}</td><td>${escapeHtml(event.notes || '—')}</td></tr>`;
-      }).join('') || noRows(7, 'No collection events in this view.'));
-    byId('collection-table').querySelectorAll('[data-record-collection]').forEach((button) => button.addEventListener('click', () => {
-      const item = items.find((row) => row.id === button.dataset.recordCollection);
-      if (!item) return;
-      const remaining = Number(item.quantity_sold) - Number(item.quantity_collected);
-      const form = byId('record-collection-form');
-      form.reset();
-      form.elements.item_id.value = item.id;
-      form.elements.quantity.max = String(remaining);
-      byId('record-collection-description').textContent = `${item.product_name}: sold ${quantity(item.quantity_sold)}, previously collected ${quantity(item.quantity_collected)}, remaining ${quantity(remaining)} ${item.unit}. Collection does not change inventory or payment balance.`;
-      openDialog('record-collection-dialog');
-    }));
-    byId('collection-table').querySelectorAll('[data-collection-history]').forEach((button) => button.addEventListener('click', () => {
-      const orderId = button.dataset.collectionHistory;
-      const orderEvents = events.filter((event) => event.order_id === orderId);
-      const order = orders.find((row) => row.id === orderId);
-      const sale = saleById.get(order?.sale_id);
-      byId('collection-history').innerHTML = `<section class="module-card"><div class="module-section-heading"><h3 class="module-section-title">Collection history · ${escapeHtml(sale?.receipt_no || 'Sale')}</h3><button class="btn btn-outline btn-small" id="close-collection-history">Close</button></div>${tableMarkup(['Timestamp', 'Product', 'Quantity', 'Staff', 'Notes'], orderEvents.map((event) => `<tr><td>${dateTime(event.created_at)}</td><td>${escapeHtml(event.product_name)}</td><td>${quantity(event.quantity)}</td><td>${escapeHtml(event.collected_by_name)}</td><td>${escapeHtml(event.notes || '—')}</td></tr>`).join('') || noRows(5, 'No pickup events have been recorded yet.'))}</section>`;
-      byId('close-collection-history').addEventListener('click', () => byId('collection-history').replaceChildren());
-      byId('collection-history').scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }));
-  };
-  content.querySelectorAll('#collection-search, #collection-status, #collection-from, #collection-to').forEach((input) => input.addEventListener('input', draw));
-  byId('record-collection-form').addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const form = event.currentTarget;
-    const button = form.querySelector('[type="submit"]');
-    const itemId = inputValue(form, 'item_id');
-    const amount = Number(inputValue(form, 'quantity'));
-    if (!Number.isFinite(amount) || amount <= 0) return showAlert('page-alert', 'Enter a collection quantity greater than zero.');
-    setBusy(button, true, 'Recording pickup…');
-    try {
-      const { error } = await supabase.rpc('record_goods_collection', {
-        p_item_id: itemId, p_quantity: amount, p_notes: inputValue(form, 'notes') || null,
-      });
-      if (error) throw error;
-      const [freshOrders, freshItems, freshEvents] = await Promise.all([
-        queryRows('goods_collection_orders', 'id, sale_id, customer_id, recorded_by_name, status, expected_date, notes, created_at, completed_at', (q) => q.order('created_at', { ascending: false }).limit(1000)),
-        queryRows('goods_collection_items', 'id, order_id, sale_item_id, product_name, sku, unit, quantity_sold, quantity_collected', (q) => q.order('created_at').limit(5000)),
-        queryRows('goods_collection_events', 'id, order_id, item_id, sale_id, product_name, customer_id, quantity, collected_by_name, notes, created_at', (q) => q.order('created_at', { ascending: false }).limit(1000)),
-      ]);
-      orders = freshOrders;
-      items = freshItems;
-      events = freshEvents;
-      itemsByOrder.clear();
-      for (const row of items) {
-        const group = itemsByOrder.get(row.order_id) || [];
-        group.push(row);
-        itemsByOrder.set(row.order_id, group);
-      }
-      byId('record-collection-dialog').close();
-      draw();
-      showAlert('page-alert', 'Goods pickup recorded. Inventory was not deducted again.', 'success');
-    } catch (error) {
-      showAlert('page-alert', `Could not record this pickup. ${error.message}`);
-    } finally {
-      setBusy(button, false);
-    }
-  });
-  draw();
 }
 
 async function renderPurchases({ content, profile }) {
@@ -1418,148 +1332,6 @@ function expenseDialog() {
   return `<dialog class="app-dialog" id="expense-dialog"><form id="expense-form" class="app-dialog-form"><div class="dialog-heading"><h3>Record expense</h3><button type="button" class="dialog-close" data-close="expense-dialog" aria-label="Close">×</button></div><div class="form-grid"><label class="field"><span>Description</span><input class="input" name="description" required maxlength="160"></label><label class="field"><span>Category</span><input class="input" name="category" required maxlength="80" placeholder="e.g. Utilities"></label><label class="field"><span>Amount (GHS)</span><input class="input" name="amount" type="number" min=".01" step=".01" required></label><label class="field"><span>Payment method</span><select class="input" name="payment_method"><option value="cash">Cash</option><option value="mobile_money">Mobile money</option><option value="card">Card</option><option value="bank_transfer">Bank transfer</option></select></label><label class="field field-wide"><span>Notes</span><textarea class="input" name="notes" rows="2" maxlength="500"></textarea></label></div><div class="dialog-actions"><button class="btn btn-outline" type="button" data-close="expense-dialog">Cancel</button><button class="btn btn-primary" type="submit">Save expense</button></div></form></dialog>`;
 }
 
-async function renderReports({ content, profile }) {
-  content.innerHTML = `${pageIntro('BUSINESS OVERVIEW', 'Reports', 'Loading sales, inventory, and collection data…')}<section class="module-card"><div class="sales-chart-loading" role="status"><span class="spinner" aria-hidden="true"></span> Loading reports…</div></section>`;
-  let sales;
-  let saleItems;
-  let products;
-  let expenses = [];
-  let purchases = [];
-  let movements = [];
-  let orders;
-  let collectionItems;
-  let collectionEvents;
-  let customers;
-  let staff = [];
-  const manager = canManage(profile);
-  try {
-    [sales, saleItems, products, orders, collectionItems, collectionEvents, customers, expenses, purchases, movements, staff] = await Promise.all([
-      queryRows('sales', 'id, created_by, subtotal, discount, grand_total, amount_paid, status, created_at', (q) => q.order('created_at', { ascending: false }).limit(1000)),
-      queryRows('sale_items', 'sale_id, product_id, product_name, sku, quantity, line_total, created_at', (q) => q.order('created_at', { ascending: false }).limit(5000)),
-      queryRows('products', 'id, name, sku, unit, stock_qty, min_stock, is_active', (q) => q.order('name').limit(2000)),
-      queryRows('goods_collection_orders', 'id, sale_id, customer_id, status, recorded_by_name, created_at, completed_at', (q) => q.order('created_at', { ascending: false }).limit(1000)),
-      queryRows('goods_collection_items', 'order_id, product_name, unit, quantity_sold, quantity_collected', (q) => q.order('created_at').limit(5000)),
-      queryRows('goods_collection_events', 'order_id, sale_id, product_name, quantity, collected_by_name, created_at', (q) => q.order('created_at', { ascending: false }).limit(2000)),
-      queryRows('customers', 'id, name'),
-      manager ? queryRows('expenses', 'amount, category, created_at', (q) => q.order('created_at', { ascending: false }).limit(1000)) : Promise.resolve([]),
-      manager ? queryRows('purchases', 'total, created_at', (q) => q.order('created_at', { ascending: false }).limit(1000)) : Promise.resolve([]),
-      manager ? queryRows('inventory_movements', 'product_name, movement_type, quantity_change, quantity_after, reason, created_by, created_at', (q) => q.order('created_at', { ascending: false }).limit(1000)) : Promise.resolve([]),
-      queryStaffDirectory(),
-    ]);
-  } catch (error) {
-    showLoadError(content, 'Reports', error);
-    return;
-  }
-  const today = businessDay(new Date());
-  const customerNames = new Map(customers.map((row) => [row.id, row.name]));
-  const staffNames = new Map(staff.map((row) => [row.id, row.full_name]));
-  const salesById = new Map(sales.map((row) => [row.id, row]));
-  const orderById = new Map(orders.map((row) => [row.id, row]));
-  const productById = new Map(products.map((row) => [row.id, row]));
-  content.innerHTML = `${pageIntro('BUSINESS OVERVIEW', 'Reports', 'Sales revenue, expenses, and stock purchases are reported separately. No profit is inferred.', manager ? '<button class="btn btn-primary" id="add-report-expense" type="button">Record expense</button>' : '')}${alertMarkup()}<div class="sales-export-actions"><button class="btn btn-outline btn-small" id="export-report-sales" type="button">Export filtered sales CSV</button></div><section class="module-card"><div class="module-toolbar"><label class="date-filter">From <input class="input" id="report-from" type="date" value="${today}"></label><label class="date-filter">To <input class="input" id="report-to" type="date" value="${today}"></label><span class="module-help">Recent data limits: 1,000 sales/orders, 5,000 sale/collection lines, and 2,000 collection events.</span></div><div id="report-output"></div></section>${manager ? expenseDialog() : '<p class="module-permission-note">Expense, purchase, and inventory movement records are visible only to managers/admins under database policies.</p>'}`;
-  if (manager) {
-    byId('add-report-expense').addEventListener('click', () => openDialog('expense-dialog'));
-    wireExpenseRecorder();
-  }
-  const paint = () => {
-    const from = byId('report-from').value;
-    const to = byId('report-to').value;
-    if (from && to && from > to) return showAlert('page-alert', 'The start date must be on or before the end date.');
-    clearAlert();
-    const matches = (row) => {
-      const day = businessDay(row.created_at);
-      return (!from || day >= from) && (!to || day <= to);
-    };
-    const periodSales = sales.filter(matches).filter((row) => row.status !== 'void');
-    const periodExpenses = expenses.filter(matches);
-    const periodPurchases = purchases.filter(matches);
-    const periodSaleIds = new Set(periodSales.map((row) => row.id));
-    const periodSaleItems = saleItems.filter((row) => periodSaleIds.has(row.sale_id));
-    const productTotals = new Map();
-    periodSaleItems.forEach((row) => {
-      const key = row.product_id || row.product_name;
-      const total = productTotals.get(key) || { name: row.product_name, unit: productById.get(row.product_id)?.unit || 'each', quantity: 0, revenue: 0 };
-      total.quantity += Number(row.quantity);
-      total.revenue += Number(row.line_total);
-      productTotals.set(key, total);
-    });
-    const periodOrders = orders.filter((order) => {
-      const sale = salesById.get(order.sale_id);
-      const day = businessDay(sale?.created_at || order.created_at);
-      return (!from || day >= from) && (!to || day <= to);
-    });
-    const periodOrderIds = new Set(periodOrders.map((order) => order.id));
-    const outstandingItems = collectionItems.filter((item) => periodOrderIds.has(item.order_id) && Number(item.quantity_sold) > Number(item.quantity_collected));
-    const remainingByProduct = new Map();
-    const remainingByCustomer = new Map();
-    outstandingItems.forEach((item) => {
-      const remaining = Number(item.quantity_sold) - Number(item.quantity_collected);
-      const productKey = `${item.product_name} · ${item.unit || 'each'}`;
-      remainingByProduct.set(productKey, (remainingByProduct.get(productKey) || 0) + remaining);
-      const customer = customerNames.get(orderById.get(item.order_id)?.customer_id) || 'Walk-in customer';
-      const customerKey = `${customer} · ${item.unit || 'each'}`;
-      remainingByCustomer.set(customerKey, (remainingByCustomer.get(customerKey) || 0) + remaining);
-    });
-    const periodEvents = collectionEvents.filter(matches);
-    const revenue = periodSales.reduce((sum, row) => sum + Number(row.grand_total), 0);
-    const paid = periodSales.reduce((sum, row) => sum + Number(row.amount_paid), 0);
-    const due = periodSales.reduce((sum, row) => sum + Math.max(0, Number(row.grand_total) - Number(row.amount_paid)), 0);
-    const expenseTotal = periodExpenses.reduce((sum, row) => sum + Number(row.amount), 0);
-    const purchaseTotal = periodPurchases.reduce((sum, row) => sum + Number(row.total), 0);
-    const cards = [
-      ['Sales after discounts', revenue, `${periodSales.length} completed transaction(s)`],
-      ['Payments at sale', paid, 'Later customer payments are not linked to individual sales'],
-      ['Original sale balances', due, 'Sale-time due amounts, not current customer debt'],
-      ['Uncollected product lines', outstandingItems.length, `${periodOrders.filter((order) => order.status !== 'completed').length} orders remain open`],
-      ['Collection events', periodEvents.length, 'Recorded during the selected period'],
-      ['Completed collection orders', periodOrders.filter((order) => order.status === 'completed').length, 'All items collected'],
-      ['Partially collected orders', periodOrders.filter((order) => order.status === 'partial').length, 'Still have items outstanding'],
-      ...(manager ? [['Expenses recorded', expenseTotal, `${periodExpenses.length} record(s)`], ['Stock purchases', purchaseTotal, `${periodPurchases.length} receipts`]] : []),
-    ];
-    const topProducts = [...productTotals.values()].sort((a, b) => b.quantity - a.quantity).slice(0, 10);
-    const lowStock = products.filter((product) => product.is_active && Number(product.stock_qty) <= Number(product.min_stock));
-    const salesByCashier = new Map();
-    periodSales.forEach((sale) => {
-      const cashier = staffNames.get(sale.created_by) || (sale.created_by ? 'Staff' : 'Unknown');
-      const total = salesByCashier.get(cashier) || { count: 0, amount: 0 };
-      total.count += 1;
-      total.amount += Number(sale.grand_total);
-      salesByCashier.set(cashier, total);
-    });
-    const eventsByStaff = new Map();
-    periodEvents.forEach((event) => {
-      const name = event.collected_by_name || 'Staff';
-      const total = eventsByStaff.get(name) || { count: 0 };
-      total.count += 1;
-      eventsByStaff.set(name, total);
-    });
-    const eventRows = periodEvents.map((event) => {
-      const order = orderById.get(event.order_id);
-      const sale = salesById.get(event.sale_id);
-      return `<tr><td>${dateTime(event.created_at)}</td><td><a href="/sales?sale=${encodeURIComponent(event.sale_id)}">${escapeHtml(sale?.receipt_no || 'Sale')}</a></td><td>${escapeHtml(customerNames.get(order?.customer_id) || 'Walk-in customer')}</td><td>${escapeHtml(event.product_name)}</td><td class="numeric">${quantity(event.quantity)}</td><td>${escapeHtml(event.collected_by_name || 'Staff')}</td></tr>`;
-    }).join('') || noRows(6, 'No collection events in this period.');
-    const movementsTable = tableMarkup(['Time', 'Product', 'Type', 'Change', 'Quantity after', 'Staff', 'Reason'],
-      movements.filter(matches).map((row) => `<tr><td>${dateTime(row.created_at)}</td><td>${escapeHtml(row.product_name)}</td><td>${escapeHtml(row.movement_type)}</td><td class="numeric">${quantity(row.quantity_change)}</td><td class="numeric">${quantity(row.quantity_after)}</td><td>${escapeHtml(staffNames.get(row.created_by) || 'Staff')}</td><td>${escapeHtml(row.reason || '—')}</td></tr>`).join('') || noRows(7, 'No inventory movements in this period.'));
-    const lowStockTable = tableMarkup(['Product', 'SKU', 'Available', 'Threshold'],
-      lowStock.map((product) => `<tr><td>${escapeHtml(product.name)}</td><td>${escapeHtml(product.sku || '—')}</td><td>${quantity(product.stock_qty)} ${unitLabel(product.unit)}</td><td>${quantity(product.min_stock)} ${unitLabel(product.unit)}</td></tr>`).join('') || noRows(4, 'No active products are below their low-stock threshold.'));
-    const outstandingProductsTable = tableMarkup(['Product', 'Quantity remaining'], [...remainingByProduct.entries()].sort((a, b) => b[1] - a[1]).map(([name, amount]) => `<tr><td>${escapeHtml(name)}</td><td class="numeric">${quantity(amount)}</td></tr>`).join('') || noRows(2, 'No goods awaiting collection.'));
-    const outstandingCustomersTable = tableMarkup(['Customer', 'Quantity remaining'], [...remainingByCustomer.entries()].sort((a, b) => b[1] - a[1]).map(([name, amount]) => `<tr><td>${escapeHtml(name)}</td><td class="numeric">${quantity(amount)}</td></tr>`).join('') || noRows(2, 'No customer goods awaiting collection.'));
-    byId('report-output').innerHTML = `<div class="cards report-cards">${cards.map(([label, value, note]) => `<article class="stat"><div class="k">${label}</div><div class="v">${/sales|payments|balances|purchases|expenses/i.test(label) ? money(value) : value}</div><div class="n">${note}</div></article>`).join('')}</div><h3 class="module-section-title">Daily sales</h3>${dailySalesTable(periodSales.filter((row) => row.status === 'completed'))}<h3 class="module-section-title">Sales by cashier</h3>${tableMarkup(['Cashier', 'Transactions', 'Sales total'], [...salesByCashier.entries()].sort((a, b) => b[1].amount - a[1].amount).map(([name, value]) => `<tr><td>${escapeHtml(name)}</td><td>${value.count}</td><td class="numeric">${money(value.amount)}</td></tr>`).join('') || noRows(3, 'No completed sales in this period.'))}<h3 class="module-section-title">Top-selling products</h3>${tableMarkup(['Product', 'Quantity sold', 'Sales value'], topProducts.map((value) => `<tr><td>${escapeHtml(value.name)}</td><td>${quantity(value.quantity)} ${unitLabel(value.unit)}</td><td class="numeric">${money(value.revenue)}</td></tr>`).join('') || noRows(3, 'No product sales in this period.'))}<h3 class="module-section-title">Low-stock products</h3>${lowStockTable}<h3 class="module-section-title">Goods awaiting collection by product</h3>${outstandingProductsTable}<h3 class="module-section-title">Goods awaiting collection by customer</h3>${outstandingCustomersTable}<h3 class="module-section-title">Collection events by staff</h3>${tableMarkup(['Staff', 'Events'], [...eventsByStaff.entries()].map(([name, value]) => `<tr><td>${escapeHtml(name)}</td><td>${value.count}</td></tr>`).join('') || noRows(2, 'No collection events in this period.'))}<h3 class="module-section-title">Collection events (Ghana time)</h3>${tableMarkup(['Collected at', 'Receipt', 'Customer', 'Product', 'Quantity', 'Staff'], eventRows)}${manager ? `<h3 class="module-section-title">Expenses by category</h3>${expenseCategoryTable(periodExpenses)}<h3 class="module-section-title">Inventory movements</h3>${movementsTable}` : ''}`;
-    byId('export-report-sales').onclick = () => downloadCsv(`opk-report-sales-${today}.csv`, periodSales.map((row) => ({
-      sale_time_ghana: formatDateTime(row.created_at),
-      sale_id: row.id,
-      subtotal_ghs: row.subtotal,
-      discount_ghs: row.discount,
-      total_ghs: row.grand_total,
-      amount_paid_at_sale_ghs: row.amount_paid,
-      status: row.status,
-    })));
-  };
-  byId('report-from').addEventListener('change', paint);
-  byId('report-to').addEventListener('change', paint);
-  paint();
-}
-
 function dailySalesTable(rows) {
   const totals = new Map();
   rows.forEach((row) => {
@@ -1582,6 +1354,73 @@ function expenseCategoryTable(rows) {
   return tableMarkup(['Category', 'Total'], [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([category, total]) => `<tr><td>${escapeHtml(category)}</td><td class="numeric">${money(total)}</td></tr>`).join('') || noRows(2, 'No expenses in this date range.'));
 }
 
+async function renderReports({ content, profile }) {
+  const manager = canManage(profile);
+  content.innerHTML = `${pageIntro('BUSINESS OVERVIEW', 'Reports', 'Sales, recorded expenses, and inventory are shown separately. Profit is not inferred.')}${alertMarkup()}<section class="module-card"><div class="module-toolbar"><label class="date-filter">From <input class="input" id="report-from" type="date"></label><label class="date-filter">To <input class="input" id="report-to" type="date"></label><button class="btn btn-outline btn-small" id="export-report-sales" type="button">Export filtered sales CSV</button></div><div id="report-output"><div class="sales-chart-loading" role="status"><span class="spinner" aria-hidden="true"></span> Loading reports…</div></div></section>`;
+  const [salesResult, itemsResult, productsResult, expensesResult, movementsResult] = await Promise.allSettled([
+    queryRows('sales', 'id, created_by, subtotal, discount, grand_total, amount_paid, status, created_at', (q) => q.order('created_at', { ascending: false }).limit(2000)),
+    queryRows('sale_items', 'sale_id, product_id, product_name, quantity, line_total, created_at', (q) => q.order('created_at', { ascending: false }).limit(10000)),
+    queryRows('products', 'id, name, sku, unit, stock_qty, min_stock, is_active', (q) => q.order('name').limit(2000)),
+    manager ? queryRows('expenses', 'amount, category, created_at', (q) => q.order('created_at', { ascending: false }).limit(2000)) : Promise.resolve([]),
+    manager ? queryRows('inventory_movements', 'product_name, movement_type, quantity_change, quantity_after, reason, created_by, created_at', (q) => q.order('created_at', { ascending: false }).limit(2000)) : Promise.resolve([]),
+  ]);
+  const failures = [];
+  const readResult = (result, label, fallback = []) => {
+    if (result.status === 'fulfilled') return result.value;
+    failures.push(`${label}: ${result.reason?.message || 'request failed'}`);
+    return fallback;
+  };
+  const sales = readResult(salesResult, 'Sales');
+  const saleItems = readResult(itemsResult, 'Sale items');
+  const products = readResult(productsResult, 'Products');
+  const expenses = readResult(expensesResult, 'Expenses');
+  const movements = readResult(movementsResult, 'Inventory movements');
+  const today = businessDay(new Date());
+  byId('report-from').value = today;
+  byId('report-to').value = today;
+  const productById = new Map(products.map((row) => [row.id, row]));
+  const paint = () => {
+    const from = byId('report-from').value;
+    const to = byId('report-to').value;
+    if (from && to && from > to) return showAlert('page-alert', 'The start date must be on or before the end date.');
+    if (failures.length) showAlert('page-alert', `Some report data could not be loaded. ${failures.join(' · ')}`);
+    else clearAlert();
+    const inRange = (row) => {
+      const day = businessDay(row.created_at);
+      return (!from || day >= from) && (!to || day <= to);
+    };
+    const matchedSales = sales.filter((row) => inRange(row) && row.status === 'completed');
+    const saleIds = new Set(matchedSales.map((row) => row.id));
+    const matchedItems = saleItems.filter((row) => saleIds.has(row.sale_id));
+    const matchedExpenses = expenses.filter(inRange);
+    const topProducts = new Map();
+    for (const item of matchedItems) {
+      const name = item.product_name || productById.get(item.product_id)?.name || 'Historical product';
+      const product = topProducts.get(name) || { name, quantity: 0, revenue: 0, unit: productById.get(item.product_id)?.unit || 'each' };
+      product.quantity += Number(item.quantity || 0);
+      product.revenue += Number(item.line_total || 0);
+      topProducts.set(name, product);
+    }
+    const gross = matchedSales.reduce((sum, row) => sum + Number(row.subtotal || 0), 0);
+    const discounts = matchedSales.reduce((sum, row) => sum + Number(row.discount || 0), 0);
+    const revenue = matchedSales.reduce((sum, row) => sum + Number(row.grand_total || 0), 0);
+    const paid = matchedSales.reduce((sum, row) => sum + Number(row.amount_paid || 0), 0);
+    const expenseTotal = matchedExpenses.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const lowStock = products.filter((row) => row.is_active && Number(row.stock_qty) <= Number(row.min_stock));
+    byId('report-output').innerHTML = `<div class="cards report-cards"><article class="stat"><div class="k">Completed transactions</div><div class="v">${matchedSales.length}</div></article><article class="stat"><div class="k">Gross sales</div><div class="v">${money(gross)}</div></article><article class="stat"><div class="k">Discounts</div><div class="v">${money(discounts)}</div></article><article class="stat"><div class="k">Sales after discounts</div><div class="v">${money(revenue)}</div></article><article class="stat"><div class="k">Payments received at sale</div><div class="v">${money(paid)}</div></article>${manager ? `<article class="stat"><div class="k">Expenses (separate)</div><div class="v">${money(expenseTotal)}</div></article>` : ''}</div><h3 class="module-section-title">Daily sales</h3>${dailySalesTable(matchedSales)}<h3 class="module-section-title">Top-selling products</h3>${tableMarkup(['Product', 'Quantity sold', 'Sales value'], [...topProducts.values()].sort((a, b) => b.quantity - a.quantity).slice(0, 20).map((item) => `<tr><td>${escapeHtml(item.name)}</td><td>${quantity(item.quantity)} ${unitLabel(item.unit)}</td><td class="numeric">${money(item.revenue)}</td></tr>`).join('') || noRows(3, 'No product sales in this date range.'))}<h3 class="module-section-title">Low-stock products</h3>${tableMarkup(['Product', 'SKU', 'Available', 'Threshold'], lowStock.map((row) => `<tr><td>${escapeHtml(row.name)}</td><td>${escapeHtml(row.sku || '—')}</td><td>${quantity(row.stock_qty)} ${unitLabel(row.unit)}</td><td>${quantity(row.min_stock)} ${unitLabel(row.unit)}</td></tr>`).join('') || noRows(4, 'No active products are below their low-stock threshold.'))}${manager ? `<h3 class="module-section-title">Expenses by category</h3>${expenseCategoryTable(matchedExpenses)}<h3 class="module-section-title">Inventory movements</h3>${tableMarkup(['Time', 'Product', 'Type', 'Change', 'Quantity after', 'Reason'], movements.filter(inRange).map((row) => `<tr><td>${dateTime(row.created_at)}</td><td>${escapeHtml(row.product_name)}</td><td>${escapeHtml(row.movement_type)}</td><td>${quantity(row.quantity_change)}</td><td>${quantity(row.quantity_after)}</td><td>${escapeHtml(row.reason || '—')}</td></tr>`).join('') || noRows(6, 'No inventory movements in this date range.'))}` : ''}`;
+    byId('export-report-sales').onclick = () => downloadCsv(`opk-report-sales-${today}.csv`, matchedSales.map((row) => ({
+      sale_time_ghana: formatDateTime(row.created_at),
+      sale_id: row.id,
+      gross_sales_ghs: row.subtotal,
+      discount_ghs: row.discount,
+      sales_after_discounts_ghs: row.grand_total,
+      amount_paid_at_sale_ghs: row.amount_paid,
+    })));
+  };
+  content.querySelectorAll('#report-from, #report-to').forEach((input) => input.addEventListener('change', paint));
+  paint();
+}
+
 if (ctx) {
   const renderers = {
     pos: renderProducts,
@@ -1589,7 +1428,6 @@ if (ctx) {
     inventory: renderInventory,
     sales: renderSales,
     reports: renderReports,
-    collections: renderCollections,
   };
   const render = renderers[page];
   if (render) await render(ctx);

@@ -15,6 +15,19 @@ create table if not exists public.sale_items (
   created_at timestamptz not null default now()
 );
 
+alter table public.sale_items add column if not exists product_name text;
+alter table public.sale_items add column if not exists sku text;
+alter table public.sale_items add column if not exists price_tier text not null default 'retail';
+alter table public.sale_items add column if not exists line_total numeric(12, 2);
+alter table public.sale_items add column if not exists created_at timestamptz not null default now();
+update public.sale_items si
+set product_name = coalesce(nullif(trim(p.name), ''), 'Historical product')
+from public.products p
+where si.product_id = p.id and (si.product_name is null or trim(si.product_name) = '');
+update public.sale_items set product_name = 'Historical product'
+where product_name is null or trim(product_name) = '';
+alter table public.sale_items alter column product_name set not null;
+
 create table if not exists public.suppliers (
   id uuid primary key default gen_random_uuid(),
   name text not null,

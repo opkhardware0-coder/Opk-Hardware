@@ -1,6 +1,64 @@
 -- OPK HARDWARES goods-collection workflow.
 -- Run after schema.sql and pos-migration.sql. Additive only.
 
+-- Repair legacy installations where sale_items was created before the POS
+-- migration added its product snapshot columns.
+alter table public.sale_items add column if not exists product_name text;
+alter table public.sale_items add column if not exists sku text;
+alter table public.sale_items add column if not exists price_tier text not null default 'retail';
+alter table public.sale_items add column if not exists line_total numeric(12, 2);
+alter table public.sale_items add column if not exists created_at timestamptz not null default now();
+update public.sale_items si
+set product_name = coalesce(nullif(trim(p.name), ''), 'Historical product')
+from public.products p
+where si.product_id = p.id and (si.product_name is null or trim(si.product_name) = '');
+update public.sale_items set product_name = 'Historical product'
+where product_name is null or trim(product_name) = '';
+alter table public.sale_items alter column product_name set not null;
+
+alter table public.products add column if not exists image_path text;
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values ('product-images', 'product-images', true, 5242880, array['image/jpeg', 'image/png', 'image/webp'])
+on conflict (id) do update
+set public = excluded.public,
+    file_size_limit = excluded.file_size_limit,
+    allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists "Public can view product images" on storage.objects;
+create policy "Public can view product images"
+on storage.objects for select to public
+using (bucket_id = 'product-images');
+drop policy if exists "Managers can upload product images" on storage.objects;
+create policy "Managers can upload product images"
+on storage.objects for insert to authenticated
+with check (
+  bucket_id = 'product-images'
+  and (storage.foldername(name))[1] = (select auth.uid())::text
+  and (select public.is_admin_or_manager())
+);
+drop policy if exists "Managers can update product images" on storage.objects;
+create policy "Managers can update product images"
+on storage.objects for update to authenticated
+using (
+  bucket_id = 'product-images'
+  and (storage.foldername(name))[1] = (select auth.uid())::text
+  and (select public.is_admin_or_manager())
+)
+with check (
+  bucket_id = 'product-images'
+  and (storage.foldername(name))[1] = (select auth.uid())::text
+  and (select public.is_admin_or_manager())
+);
+drop policy if exists "Managers can delete product images" on storage.objects;
+create policy "Managers can delete product images"
+on storage.objects for delete to authenticated
+using (
+  bucket_id = 'product-images'
+  and (storage.foldername(name))[1] = (select auth.uid())::text
+  and (select public.is_admin_or_manager())
+);
+
 create table if not exists public.goods_collection_orders (
   id uuid primary key default gen_random_uuid(),
   sale_id uuid not null unique references public.sales (id) on delete restrict,
@@ -93,7 +151,8 @@ create or replace function public.create_product_with_stock(
   p_retail_price numeric,
   p_wholesale_price numeric,
   p_initial_stock numeric,
-  p_min_stock numeric
+  p_min_stock numeric,
+  p_image_path text default null
 )
 returns public.products
 language plpgsql
@@ -115,12 +174,15 @@ begin
     raise exception 'Stock quantities must be non-negative and use no more than three decimal places.';
   end if;
   if nullif(trim(p_unit), '') is null then raise exception 'Choose a unit of measurement.'; end if;
+  if p_image_path is not null and (storage.foldername(p_image_path))[1] <> (select auth.uid())::text then
+    raise exception 'Product images must be uploaded to your own staff folder.';
+  end if;
 
   insert into public.products (
-    sku, name, category, unit, cost_price, retail_price, wholesale_price, stock_qty, min_stock
+    sku, name, category, unit, cost_price, retail_price, wholesale_price, stock_qty, min_stock, image_path
   ) values (
     nullif(trim(p_sku), ''), trim(p_name), nullif(trim(p_category), ''), trim(p_unit),
-    p_cost_price, p_retail_price, p_wholesale_price, p_initial_stock, p_min_stock
+    p_cost_price, p_retail_price, p_wholesale_price, p_initial_stock, p_min_stock, p_image_path
   ) returning * into v_product;
 
   if p_initial_stock > 0 then
@@ -294,6 +356,49 @@ begin
 end;
 $$;
 
+create or replace function public.complete_sale_once(
+  p_customer_id uuid,
+  p_items jsonb,
+  p_price_tier text,
+  p_payment_method text,
+  p_amount_tendered numeric,
+  p_request_id uuid
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_hash text;
+  v_existing_hash text;
+  v_result jsonb;
+begin
+  if p_request_id is null then raise exception 'A checkout request id is required.'; end if;
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(p_request_id::text, 0));
+  v_hash := pg_catalog.md5(pg_catalog.jsonb_build_object(
+    'customer_id', p_customer_id,
+    'items', p_items,
+    'price_tier', p_price_tier,
+    'payment_method', p_payment_method,
+    'amount_tendered', p_amount_tendered
+  )::text);
+  select request_hash, result into v_existing_hash, v_result
+  from public.sale_checkout_requests
+  where request_id = p_request_id and requested_by = (select auth.uid());
+  if found then
+    if v_existing_hash <> v_hash then
+      raise exception 'This checkout request was already completed with different sale details. Check Sales History before starting another sale.';
+    end if;
+    return v_result;
+  end if;
+  v_result := public.complete_sale(p_customer_id, p_items, p_price_tier, p_payment_method, p_amount_tendered);
+  insert into public.sale_checkout_requests (request_id, requested_by, request_hash, result)
+  values (p_request_id, (select auth.uid()), v_hash, v_result);
+  return v_result;
+end;
+$$;
+
 create or replace function public.record_goods_collection(
   p_item_id uuid,
   p_quantity numeric,
@@ -375,11 +480,16 @@ as $$
 $$;
 
 revoke all on function public.create_product_with_stock(text, text, text, text, numeric, numeric, numeric, numeric, numeric) from public;
+revoke all on function public.create_product_with_stock(text, text, text, text, numeric, numeric, numeric, numeric, numeric, text) from public;
+revoke all on function public.create_product_with_stock(text, text, text, text, numeric, numeric, numeric, numeric, numeric) from authenticated;
 revoke all on function public.complete_sale(uuid, jsonb, text, text, numeric) from authenticated;
+revoke all on function public.complete_sale_once(uuid, jsonb, text, text, numeric, uuid) from public;
 revoke all on function public.complete_sale_with_collection(uuid, jsonb, text, text, numeric, jsonb, uuid, date, text) from public;
 revoke all on function public.record_goods_collection(uuid, numeric, text) from public;
 revoke all on function public.get_staff_directory() from public;
-grant execute on function public.create_product_with_stock(text, text, text, text, numeric, numeric, numeric, numeric, numeric) to authenticated;
+grant execute on function public.create_product_with_stock(text, text, text, text, numeric, numeric, numeric, numeric, numeric, text) to authenticated;
 grant execute on function public.complete_sale_with_collection(uuid, jsonb, text, text, numeric, jsonb, uuid, date, text) to authenticated;
+grant execute on function public.complete_sale_once(uuid, jsonb, text, text, numeric, uuid) to authenticated;
 grant execute on function public.record_goods_collection(uuid, numeric, text) to authenticated;
 grant execute on function public.get_staff_directory() to authenticated;
+grant update (image_path) on public.products to authenticated;
