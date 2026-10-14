@@ -72,45 +72,65 @@ export async function renderDashboard({ content, user, profile, isCurrent = () =
       </section>
       <section class="panel"><h2>Recent sales</h2><div id="recent-sales" class="empty">Loading recent sales…</div></section>` : ''}`;
 
-  const customerCount = supabase.from('customers').select('id', { count: 'exact', head: true });
-  const productCount = supabase.from('products').select('id', { count: 'exact', head: true }).eq('is_active', true);
-  const salesQuery = manager
-    ? supabase.from('sales').select('receipt_no, grand_total, created_at, status').gte('created_at', weekStart).eq('status', 'completed').order('created_at', { ascending: false }).limit(1000)
-    : Promise.resolve(null);
-  const [customers, products, sales] = await Promise.all([customerCount, productCount, salesQuery]);
-  if (!isCurrent()) return;
-
-  if (customers.error) {
-    showMessage(`Could not load the customer count. ${customers.error.message}`);
-    setValue('customer-count', '—');
-  } else {
-    setValue('customer-count', new Intl.NumberFormat('en-GH').format(customers.count || 0));
+  const tasks = [
+    (async () => {
+      const { count, error } = await supabase.from('customers').select('id', { count: 'exact', head: true });
+      if (!isCurrent()) return;
+      if (error) {
+        showMessage(`Could not load the customer count. ${error.message}`);
+        setValue('customer-count', '—');
+      } else {
+        setValue('customer-count', new Intl.NumberFormat('en-GH').format(count || 0));
+      }
+    })().catch((error) => {
+      if (!isCurrent()) return;
+      showMessage(`Could not load the customer count. ${error.message || 'Database request failed.'}`);
+      setValue('customer-count', '—');
+    }),
+    (async () => {
+      const { count, error } = await supabase.from('products').select('id', { count: 'exact', head: true }).eq('is_active', true);
+      if (!isCurrent()) return;
+      if (error) {
+        showMessage(`Could not load the product count. ${error.message}`);
+        setValue('product-count', '—');
+      } else {
+        setValue('product-count', new Intl.NumberFormat('en-GH').format(count || 0));
+      }
+    })().catch((error) => {
+      if (!isCurrent()) return;
+      showMessage(`Could not load the product count. ${error.message || 'Database request failed.'}`);
+      setValue('product-count', '—');
+    }),
+  ];
+  if (manager) {
+    tasks.push((async () => {
+      const { data, error } = await supabase.from('sales').select('receipt_no, grand_total, created_at, status')
+        .gte('created_at', weekStart).eq('status', 'completed').order('created_at', { ascending: false }).limit(1000);
+      if (!isCurrent()) return;
+      if (error) {
+        showMessage(`Could not load sales activity. ${error.message}`);
+        setValue('today-sales', '—');
+        document.getElementById('sales-chart').outerHTML = '<div class="empty">Sales chart is unavailable until sales data can be loaded.</div>';
+        document.getElementById('recent-sales').textContent = 'Recent sales are unavailable until sales data can be loaded.';
+        return;
+      }
+      const rows = data || [];
+      const todayRows = rows.filter((row) => businessDate(row.created_at) >= start.slice(0, 10));
+      setValue('today-sales', formatMoney(todayRows.reduce((sum, row) => sum + Number(row.grand_total), 0)));
+      renderSalesChart(rows);
+      const recent = rows.slice(0, 8);
+      document.getElementById('recent-sales').innerHTML = recent.length
+        ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>Receipt</th><th>Date</th><th class="numeric">Total</th></tr></thead><tbody>${recent.map((row) => `<tr><td>${escapeHtml(row.receipt_no)}</td><td>${escapeHtml(formatDateTime(row.created_at))}</td><td class="numeric">${formatMoney(row.grand_total)}</td></tr>`).join('')}</tbody></table></div>`
+        : '<div class="empty">No sales in the last seven days.</div>';
+    })().catch((error) => {
+      if (!isCurrent()) return;
+      showMessage(`Could not load sales activity. ${error.message || 'Database request failed.'}`);
+      setValue('today-sales', '—');
+      document.getElementById('sales-chart').outerHTML = '<div class="empty">Sales chart is unavailable until sales data can be loaded.</div>';
+      document.getElementById('recent-sales').textContent = 'Recent sales are unavailable until sales data can be loaded.';
+    }));
   }
-
-  if (products.error) {
-    showMessage(`Could not load the product count. ${products.error.message}`);
-    setValue('product-count', '—');
-  } else {
-    setValue('product-count', new Intl.NumberFormat('en-GH').format(products.count || 0));
-  }
-
-  if (!manager) return;
-  if (sales.error) {
-    showMessage(`Could not load sales activity. ${sales.error.message}`);
-    setValue('today-sales', '—');
-    document.getElementById('sales-chart').outerHTML = '<div class="empty">Sales chart is unavailable until sales data can be loaded.</div>';
-    document.getElementById('recent-sales').textContent = 'Recent sales are unavailable until sales data can be loaded.';
-    return;
-  }
-
-  const rows = sales.data || [];
-  const todayRows = rows.filter((row) => businessDate(row.created_at) >= start.slice(0, 10));
-  setValue('today-sales', formatMoney(todayRows.reduce((sum, row) => sum + Number(row.grand_total), 0)));
-  renderSalesChart(rows);
-  const recent = rows.slice(0, 8);
-  document.getElementById('recent-sales').innerHTML = recent.length
-    ? `<div class="table-wrap"><table class="data-table"><thead><tr><th>Receipt</th><th>Date</th><th class="numeric">Total</th></tr></thead><tbody>${recent.map((row) => `<tr><td>${escapeHtml(row.receipt_no)}</td><td>${escapeHtml(formatDateTime(row.created_at))}</td><td class="numeric">${formatMoney(row.grand_total)}</td></tr>`).join('')}</tbody></table></div>`
-    : '<div class="empty">No sales in the last seven days.</div>';
+  await Promise.all(tasks);
 
 }
 

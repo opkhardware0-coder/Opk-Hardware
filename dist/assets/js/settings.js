@@ -19,7 +19,7 @@ const TOUR_STEPS = [
   {
     selector: '.topbar h1',
     title: 'Settings and your workspace',
-    text: 'This page shows your account, installation options, available data exports, and safe local preferences.',
+    text: 'Use Settings to install OPK, take the workspace tour, reset this device, and manage staff.',
   },
   {
     selector: '.nav a[href="/dashboard"]',
@@ -27,14 +27,14 @@ const TOUR_STEPS = [
     text: 'The dashboard displays database-backed sales, stock, customer balances, and recent receipts when those records are available.',
   },
   {
-    selector: '.nav a[href="/pos"]',
+    selector: '.nav a[href="/products"]',
     title: 'POS and other modules',
     text: 'The POS and operational pages are connected to the database. Checkout validates stock, pricing, payments, and customer balances in a secured database function.',
   },
   {
     selector: '.user-chip',
     title: 'Your account and role',
-    text: 'Your identity and role come from your signed-in account. Owners and managers can update supported staff roles here in Settings.',
+    text: 'Your identity and role come from your signed-in account. Owners and managers can invite staff and update supported roles in Settings.',
   },
   {
     selector: '#logout',
@@ -45,13 +45,6 @@ const TOUR_STEPS = [
 
 function roleLabel(role) {
   return ({ admin: 'Owner (admin)', manager: 'Manager', cashier: 'Cashier' })[role] || 'Role not assigned';
-}
-
-function dateLabel(date = new Date()) {
-  return new Intl.DateTimeFormat('en-GH', {
-    dateStyle: 'full',
-    timeZone: 'Africa/Accra',
-  }).format(date);
 }
 
 function message(el, text, type = 'info') {
@@ -75,156 +68,152 @@ export function renderSettings({ user, profile, content }) {
   content.innerHTML = `
     <div class="settings-heading">
       <div>
-        <p class="settings-eyebrow">OPK HARDWARES WORKSPACE</p>
         <h2><span class="settings-heading-icon" aria-hidden="true">⚙</span> Settings</h2>
-        <p class="settings-date">${escapeHtml(dateLabel())}</p>
       </div>
     </div>
 
     <div class="settings-grid">
-      <section class="settings-card install-card" aria-labelledby="install-title">
+      <section class="settings-card install-card settings-install-card" aria-labelledby="install-title">
         <div class="settings-card-heading">
           <div class="settings-icon settings-app-logo" aria-hidden="true"><img src="/assets/images/opk-icon-192.png" alt=""></div>
-          <div><h3 id="install-title">Install OPK HARDWARES</h3>
-            <p>Install the POS on this device for faster access and a convenient app-like experience.</p></div>
+          <div><h3 id="install-title">Install app</h3><p>Get quick access to OPK on this device.</p></div>
         </div>
         <div id="install-message" class="settings-inline-message" role="status" aria-live="polite"></div>
-        <button class="btn btn-primary" id="install-app" type="button">Install app</button>
-        <p class="settings-help">Installation requires HTTPS (Vercel provides this) and a supported browser. The app shell is cached for convenience; sign-in and current business data still require an internet connection.</p>
+        <button class="btn btn-primary settings-install-button" id="install-app" type="button">Install app</button>
+      </section>
+
+      <section class="settings-card settings-tour-card" aria-labelledby="tour-title">
+        <div class="settings-card-heading">
+          <div class="settings-icon" aria-hidden="true">◇</div>
+          <div><h3 id="tour-title">Guided Tour</h3><p>Take a quick look around the POS.</p></div>
+        </div>
+        <p id="tour-status" class="settings-help">${localStorage.getItem(TOUR_KEY) === '1' ? 'Tour completed.' : 'Learn the main pages and controls.'}</p>
+        <button class="btn btn-primary" id="start-tour" type="button">Start tour</button>
+      </section>
+
+      <section class="settings-card settings-reset-card" aria-labelledby="reset-title">
+        <div class="settings-card-heading">
+          <div class="settings-icon settings-icon-warning" aria-hidden="true">↺</div>
+          <div><h3 id="reset-title">Reset app data</h3><p>Clear this device’s app preferences, draft cart, and offline files.</p></div>
+        </div>
+        <div id="reset-message" role="status" aria-live="polite" hidden></div>
+        <button class="btn btn-danger" id="reset-app" type="button">Reset this device</button>
+        <p class="settings-help">Keeps your sign-in and all Supabase business records. An unresolved sale retry is retained to prevent duplicate sales.</p>
+      </section>
+
+      <section class="settings-card settings-users-card" aria-labelledby="users-title">
+        <div class="settings-card-heading">
+          <div class="settings-icon" aria-hidden="true">♙</div>
+          <div><h3 id="users-title">Users & Staff</h3><p>View staff and manage permitted roles.</p></div>
+        </div>
+        <div id="users-message" role="status" aria-live="polite"></div>
+        ${canManage(profile) ? `<form id="staff-invite-form" class="staff-invite-form">
+          <label class="field"><span>Staff member name</span><input class="input" name="full_name" maxlength="100" required></label>
+          <label class="field"><span>Email address</span><input class="input" name="email" type="email" maxlength="254" autocomplete="email" required></label>
+          <button class="btn btn-primary" type="submit">Invite staff</button>
+        </form>` : ''}
+        <div id="users-list" class="settings-users-list"><div class="empty">Loading staff profiles…</div></div>
+        <p class="settings-help">New staff receive an email to set their password. Invitations create a cashier account; role changes remain subject to Supabase policy.</p>
       </section>
 
       <section class="settings-card account-card" aria-labelledby="account-title">
         <div class="settings-card-heading">
           <div class="settings-icon" aria-hidden="true">◎</div>
-          <div><h3 id="account-title">Your account</h3><p>Current signed-in staff identity and access.</p></div>
+          <div><h3 id="account-title">Your account</h3><p>Signed-in staff details.</p></div>
         </div>
         <dl class="settings-details">
           <div><dt>Name</dt><dd>${escapeHtml(displayName)}</dd></div>
           <div><dt>Email</dt><dd>${escapeHtml(user.email || 'Not provided')}</dd></div>
           <div><dt>Role</dt><dd><span class="badge badge-primary">${escapeHtml(roleLabel(role))}</span></dd></div>
-          <div><dt>Access</dt><dd>${role === 'admin' ? 'Owner-level access configured by database policies.' : role === 'manager' ? 'Manager access configured by database policies.' : 'Staff access is enforced by Supabase policies.'}</dd></div>
         </dl>
-        <a class="settings-text-link" href="/login?reset=1">Account recovery and password reset</a>
+        <a class="settings-text-link" href="/login?reset=1">Reset password</a>
       </section>
 
-      <section class="settings-card" aria-labelledby="tour-title">
-        <div class="settings-card-heading">
-          <div class="settings-icon" aria-hidden="true">◇</div>
-          <div><h3 id="tour-title">Guided Tour</h3>
-            <p>Review the main POS workflow and learn how to use the system.</p></div>
-        </div>
-        <p id="tour-status" class="settings-help">${localStorage.getItem(TOUR_KEY) === '1' ? 'You have completed the current workspace tour.' : 'The tour explains the dashboard, POS, navigation, and account.'}</p>
-        <button class="btn btn-primary" id="start-tour" type="button">Start tour</button>
-      </section>
-
-      <section class="settings-card" aria-labelledby="protection-title">
+      <section class="settings-card settings-export-card" aria-labelledby="protection-title">
         <div class="settings-card-heading">
           <div class="settings-icon" aria-hidden="true">⬇</div>
-          <div><h3 id="protection-title">Data Protection & Exports</h3>
-            <p>Download records visible to your signed-in account under Supabase Row Level Security.</p></div>
+          <div><h3 id="protection-title">Data Exports</h3><p>Download records available to your signed-in role.</p></div>
         </div>
         <div id="export-message" role="status" aria-live="polite" hidden></div>
         <div class="settings-export-list">
           ${exportTables.map((item) => `<div class="settings-export-row"><div><strong>${item.label}</strong><small>CSV spreadsheet</small></div><button class="btn btn-outline" type="button" data-export="${item.table}">Download CSV</button></div>`).join('')}
         </div>
         <button class="btn btn-secondary settings-backup-button" id="download-backup" type="button">Download JSON business-data backup</button>
-        <p class="settings-help"><strong>Last successful export on this device:</strong> <span id="last-export">${escapeHtml(exportLabel)}</span>. Exports contain only business records readable under your current role; staff credentials, tokens, and secrets are never included. Use Supabase’s authorized backup tools for full database recovery.</p>
-      </section>
-
-      <section class="settings-card" aria-labelledby="reset-title">
-        <div class="settings-card-heading">
-          <div class="settings-icon settings-icon-warning" aria-hidden="true">↺</div>
-          <div><h3 id="reset-title">Reset & Restore</h3>
-            <p>These controls affect only this browser’s interface preferences and cached app shell.</p></div>
-        </div>
-        <div id="reset-message" role="status" aria-live="polite" hidden></div>
-        <div class="settings-action-list">
-          <div class="settings-action-row"><div><strong>Reset interface preferences</strong><small>Expand the sidebar and restore local display defaults. Keeps your sign-in and business data.</small></div><button class="btn btn-outline" id="reset-preferences" type="button">Reset preferences</button></div>
-          <div class="settings-action-row"><div><strong>Replay the guided tour</strong><small>Clear this browser’s tour completion marker.</small></div><button class="btn btn-outline" id="reset-tour" type="button">Reset tour</button></div>
-          <div class="settings-action-row"><div><strong>Clear draft sale</strong><small>Remove your unsaved POS cart on this device only.</small></div><button class="btn btn-outline" id="reset-cart" type="button">Clear draft</button></div>
-          <div class="settings-action-row"><div><strong>Clear cached app shell</strong><small>Removes OPK’s offline static cache only. It will be cached again when you are online.</small></div><button class="btn btn-outline" id="clear-cache" type="button">Clear cache</button></div>
-        </div>
-        <p class="settings-safety-note">Completed sales, products, stock, customers, staff accounts, and database records are never cleared here. Draft-cart clearing only removes the current user’s unsaved cart from this browser.</p>
-      </section>
-
-      <section class="settings-card" aria-labelledby="business-title">
-        <div class="settings-card-heading">
-          <div class="settings-icon" aria-hidden="true">▦</div>
-          <div><h3 id="business-title">Business Settings</h3><p>Business identity and configuration currently available in this application.</p></div>
-        </div>
-        <div class="business-identity"><img src="/assets/images/opk-logo.png" alt="OPK HARDWARES logo"><div><strong>OPK HARDWARES</strong><small>Business name and logo configured in the application</small></div></div>
-        <dl class="settings-details">
-          <div><dt>Currency</dt><dd>Ghana cedi (GHS)</dd></div>
-          <div><dt>Store time zone</dt><dd>Africa/Accra</dd></div>
-          <div><dt>Contact, address, receipt footer</dt><dd>Not configured</dd></div>
-          <div><dt>Tax configuration</dt><dd>Not available; transaction tax rules are not implemented here.</dd></div>
-        </dl>
-        <p class="settings-help">Shared business details cannot be edited yet: the current database has no business-configuration fields or authorized update endpoint. Tax values will not be changed from this page.</p>
-      </section>
-
-      <section class="settings-card settings-users-card" aria-labelledby="users-title">
-        <div class="settings-card-heading">
-          <div class="settings-icon" aria-hidden="true">♙</div>
-          <div><h3 id="users-title">Users & Staff</h3><p>Profile information visible under your database permissions.</p></div>
-        </div>
-        <div id="users-message" role="status" aria-live="polite"></div>
-        <div id="users-list" class="settings-users-list"><div class="empty">Loading staff profiles…</div></div>
-        <p class="settings-help">Admins and managers can update supported roles here. Create accounts in Supabase Authentication first; new profiles default to Cashier. Account invitations, password management, and activation require privileged Supabase Auth operations and are not exposed in this browser app.</p>
-      </section>
-
-      <section class="settings-card settings-guide-card" aria-labelledby="guide-title">
-        <div class="settings-card-heading">
-          <div class="settings-icon" aria-hidden="true">☷</div>
-          <div><h3 id="guide-title">How OPK HARDWARES Works</h3><p>What is actually available in this version.</p></div>
-        </div>
-        <ol class="settings-guide">
-          <li>Sign in with your staff account; profile roles are read from Supabase.</li>
-          <li>Use the Dashboard to view available sales, stock, and customer summary data.</li>
-          <li>Download authorized product, sales, or customer data from Data Protection.</li>
-          <li>Create staff accounts in Supabase Auth, then manage supported roles in Settings.</li>
-          <li>Use the POS, inventory, sales history, and reports pages for the workflows available in this version.</li>
-        </ol>
+        <p class="settings-help"><strong>Last export:</strong> <span id="last-export">${escapeHtml(exportLabel)}</span>. Private credentials are never exported.</p>
       </section>
     </div>
 
-    <dialog class="settings-confirm" id="settings-confirm">
-      <form method="dialog">
-        <h3 id="confirm-title">Confirm action</h3>
-        <p id="confirm-copy"></p>
-        <div class="settings-confirm-actions">
-          <button class="btn btn-outline" value="cancel">Cancel</button>
-          <button class="btn btn-danger" id="confirm-accept" value="confirm">Confirm</button>
-        </div>
-      </form>
-    </dialog>
     <div id="tour-root"></div>`;
 
   setupInstallation();
   setupTour();
   setupExports(content, exportTables);
   setupReset(user.id);
+  setupStaffInvitation(profile);
   loadStaffProfiles({ user, profile });
+}
+
+function setupStaffInvitation(profile) {
+  const form = document.getElementById('staff-invite-form');
+  if (!form) return;
+  const notice = document.getElementById('users-message');
+  const list = document.getElementById('users-list');
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (!canManage(profile)) return message(notice, 'Manager access is required to invite staff.', 'error');
+    const formData = new FormData(form);
+    const fullName = formData.get('full_name')?.toString().trim() || '';
+    const email = formData.get('email')?.toString().trim() || '';
+    if (!fullName || fullName.length > 100 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+      return message(notice, 'Enter a staff name and a valid email address.', 'error');
+    }
+    const submit = form.querySelector('button[type="submit"]');
+    submit.disabled = true;
+    submit.textContent = 'Sending invite…';
+    try {
+      const { data: invitation, error } = await supabase.functions.invoke('invite-staff', {
+        body: { full_name: fullName, email },
+      });
+      if (error) throw error;
+      if (!invitation?.user?.id) throw new Error('The invitation endpoint returned no staff account.');
+      list.insertAdjacentHTML('beforeend', `<div class="settings-user-card"><strong>${escapeHtml(fullName)}</strong><span>Cashier · invitation sent</span><small>${escapeHtml(email)}</small></div>`);
+      form.reset();
+      message(notice, `Invitation sent to ${email}. The staff member can set a password from their email.`, 'success');
+    } catch (error) {
+      message(notice, `Could not invite staff. ${error.message}`, 'error');
+    } finally {
+      submit.disabled = false;
+      submit.textContent = 'Invite staff';
+    }
+  });
 }
 
 function setupInstallation() {
   const button = document.getElementById('install-app');
   const status = document.getElementById('install-message');
   let installationPending = false;
+  const installSteps = () => {
+    const agent = navigator.userAgent.toLowerCase();
+    const isIOS = /iphone|ipad|ipod/.test(agent)
+      || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if (isIOS) return 'In Safari, tap Share, then choose “Add to Home Screen”.';
+    if (/android/.test(agent)) return 'In Chrome, open the menu (⋮) and choose “Install app” or “Add to Home screen”.';
+    if (/edg\//.test(agent)) return 'In Microsoft Edge, open the menu (⋯) and choose Apps > Install this site as an app.';
+    if (/chrome|chromium/.test(agent)) return 'In Chrome, use the install icon in the address bar or open the menu (⋮) and choose “Install OPK HARDWARES”.';
+    return 'Open this site in Chrome or Edge and use its menu to choose “Install app”. On iPhone or iPad, use Safari Share > “Add to Home Screen”.';
+  };
   const update = (showStateMessage = true) => {
     const state = getInstallState();
     if (state === 'installed') installationPending = false;
-    button.disabled = state === 'installed' || state === 'unavailable' || installationPending;
-    button.textContent = state === 'installed' ? 'App installed' : installationPending ? 'Installation requested' : state === 'ready' ? 'Install app' : 'Install unavailable';
+    button.disabled = state === 'installed' || installationPending;
+    button.textContent = state === 'installed' ? 'App installed' : installationPending ? 'Installation requested' : state === 'ready' ? 'Install app' : 'Show install steps';
     if (!showStateMessage) return;
     if (state === 'installed') {
       message(status, 'OPK HARDWARES is installed on this device.', 'success');
     } else if (installationPending) {
       message(status, 'Your browser accepted the installation request. It will finish in the browser interface.', 'info');
     } else if (state === 'unavailable') {
-      const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
-      message(status, ios
-        ? 'To install on iPhone or iPad, use Share in Safari, then choose “Add to Home Screen”.'
-        : 'This browser has not offered installation. Try a supported browser over HTTPS, or use its menu and choose “Install app” or “Add to Home screen”.', 'info');
+      message(status, `${installSteps()} The browser has not opened its one-tap install prompt.`, 'info');
     } else {
       message(status, 'Ready to install this app on your device.', 'success');
     }
@@ -243,7 +232,7 @@ function setupInstallation() {
       } else if (result.outcome === 'installed') {
         message(status, 'OPK HARDWARES is already installed on this device.', 'success');
       } else {
-        update();
+        message(status, `${installSteps()} The browser has not offered its one-tap install prompt.`, 'info');
       }
     } catch (error) {
       message(status, `The browser could not start installation: ${error.message}`, 'error');
@@ -421,65 +410,38 @@ function setupExports(content, exportTables) {
   });
 }
 
-function confirmAction(title, copy, acceptText) {
-  const dialog = document.getElementById('settings-confirm');
-  document.getElementById('confirm-title').textContent = title;
-  document.getElementById('confirm-copy').textContent = copy;
-  document.getElementById('confirm-accept').textContent = acceptText;
-  return new Promise((resolve) => {
-    dialog.addEventListener('close', () => resolve(dialog.returnValue === 'confirm'), { once: true });
-    dialog.showModal();
-  });
-}
-
 function setupReset(userId) {
   const notice = document.getElementById('reset-message');
-
-  document.getElementById('reset-preferences').addEventListener('click', async () => {
-    if (!await confirmAction('Reset interface preferences?', 'This expands the sidebar and clears OPK display preferences stored in this browser. Your sign-in, profile, and all business data remain unchanged.', 'Reset preferences')) return;
+  document.getElementById('reset-app').addEventListener('click', async () => {
+    const confirmation = window.prompt(
+      'This clears OPK preferences, the draft cart, and offline app files on this device only. It does not erase Supabase business data or sign you out. Any unresolved sale retry will be kept to prevent duplicate sales. Type RESET to continue.'
+    );
+    if (confirmation !== 'RESET') {
+      if (confirmation !== null) message(notice, 'Reset cancelled. Type RESET exactly to continue.', 'info');
+      return;
+    }
+    const button = document.getElementById('reset-app');
+    button.disabled = true;
+    button.textContent = 'Resetting…';
     try {
       localStorage.removeItem('opk_sidebar');
       localStorage.removeItem('opk_settings');
-      message(notice, 'Interface preferences reset. Reload this page to apply the default sidebar layout.', 'success');
-    } catch (error) {
-      message(notice, `Could not reset interface preferences. ${error.message}`, 'error');
-    }
-  });
-
-  document.getElementById('reset-tour').addEventListener('click', async () => {
-    if (!await confirmAction('Reset guided tour?', 'This only clears the tour-completion marker in this browser. It does not affect accounts or business records.', 'Reset tour')) return;
-    localStorage.removeItem(TOUR_KEY);
-    document.getElementById('tour-status').textContent = 'Tour progress reset. Start the tour whenever you are ready.';
-    message(notice, 'Guided tour can now be replayed.', 'success');
-  });
-
-  document.getElementById('reset-cart').addEventListener('click', async () => {
-    if (!await confirmAction('Clear this draft sale?', 'This removes only your unsaved POS cart from this browser. Completed transactions and stock are unchanged.', 'Clear draft sale')) return;
-    try {
+      localStorage.removeItem('opk_products_view');
+      localStorage.removeItem('opk_last_export');
+      localStorage.removeItem(TOUR_KEY);
       localStorage.removeItem(`opk_cart_${userId}`);
-      message(notice, 'Your unsaved POS cart was cleared from this browser.', 'success');
+      if ('caches' in window) {
+        const names = await caches.keys();
+        const appCaches = names.filter((name) => name.startsWith('opk-pos-shell-'));
+        const results = await Promise.all(appCaches.map((name) => caches.delete(name)));
+        if (results.some((deleted) => !deleted)) throw new Error('The browser did not remove every OPK offline cache.');
+      }
+      message(notice, 'This device’s OPK app preferences and draft cart were reset. Business records and sign-in were kept.', 'success');
+      window.setTimeout(() => location.reload(), 1000);
     } catch (error) {
-      message(notice, `Could not clear the saved draft sale. ${error.message}`, 'error');
-    }
-  });
-
-  document.getElementById('clear-cache').addEventListener('click', async () => {
-    if (!await confirmAction('Clear OPK offline app cache?', 'This removes only cached OPK static app files from this browser. Business data and sign-in are not deleted. The app must be online to cache its shell again.', 'Clear cache')) return;
-    const button = document.getElementById('clear-cache');
-    button.disabled = true;
-    button.textContent = 'Clearing…';
-    try {
-      if (!('caches' in window)) throw new Error('This browser does not support managed app caches.');
-      const names = await caches.keys();
-      const appCaches = names.filter((name) => name.startsWith('opk-pos-shell-'));
-      const results = await Promise.all(appCaches.map((name) => caches.delete(name)));
-      if (results.some((deleted) => !deleted)) throw new Error('The browser did not remove every OPK cache.');
-      message(notice, 'OPK offline app cache cleared. It will be rebuilt on a later online visit.', 'success');
-    } catch (error) {
-      message(notice, `Could not clear the app cache. ${error.message}`, 'error');
-    } finally {
+      message(notice, `The reset was incomplete. ${error.message}`, 'error');
       button.disabled = false;
-      button.textContent = 'Clear cache';
+      button.textContent = 'Reset this device';
     }
   });
 }
@@ -490,7 +452,7 @@ async function loadStaffProfiles({ user, profile }) {
   try {
     const { data, error } = await supabase.from('profiles').select('id, full_name, role').order('full_name');
     if (error) throw error;
-    const profiles = data || [];
+    const profiles = [...(data || [])];
     if (!profiles.length) {
       list.innerHTML = '<div class="empty">No staff profiles are visible to this account.</div>';
       return;
@@ -507,7 +469,7 @@ async function loadStaffProfiles({ user, profile }) {
       }).join('')}</tbody></table></div>`;
     };
     draw();
-    message(notice, `${profiles.length} profile${profiles.length === 1 ? '' : 's'} visible under current Row Level Security policies. Auth account status and email for other users are not exposed to this page.`, 'info');
+    message(notice, `${profiles.length} staff profile${profiles.length === 1 ? '' : 's'} loaded.`, 'info');
     list.addEventListener('click', async (event) => {
       const button = event.target.closest('[data-save-settings-role]');
       if (!button) return;

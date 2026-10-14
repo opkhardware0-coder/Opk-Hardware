@@ -173,7 +173,7 @@ async function renderProducts(context) {
   content.innerHTML = `${pageIntro('PRODUCT CATALOG', 'Products & Categories', 'Loading the catalogue…')}<section class="module-card"><div class="sales-chart-loading" role="status"><span class="spinner" aria-hidden="true"></span> Loading products…</div></section>`;
   let rows;
   try {
-    rows = await queryRows('products', 'id, sku, name, category, unit, cost_price, retail_price, image_path, stock_qty, min_stock, is_active, updated_at', (q) => q.order('name').range(0, 999));
+    rows = await queryRows('products', 'id, sku, name, category, unit, cost_price, retail_price, image_path, stock_qty, min_stock, is_active, updated_at', (q) => q.order('name').range(0, 99));
   } catch (error) {
     if (!isCurrent()) return;
     showLoadError(content, 'Products & Categories', error);
@@ -200,7 +200,7 @@ async function renderProducts(context) {
   let cart = pendingCheckout?.payload?.p_items
     ? pendingCheckout.payload.p_items.map((item) => ({ id: item.product_id, quantity: Number(item.quantity) }))
     : readCart(user.id, rows);
-  let moreProductsAvailable = rows.length === 1000;
+  let moreProductsAvailable = rows.length === 100;
   let customersLoaded = false;
   let customersLoading = false;
   let customerRows = [];
@@ -270,7 +270,7 @@ async function renderProducts(context) {
       ? `<div class="products-grid">${visible.map(cardMarkup).join('') || '<div class="empty">No products match these filters.</div>'}</div>`
       : tableMarkup(['Product', 'Category', 'SKU', 'Selling price', 'Quantity', 'Status', 'Actions'],
         visible.map((row) => `<tr><td><strong>${escapeHtml(row.name)}</strong><small class="table-subline">${unitLabel(row.unit)}</small></td><td>${escapeHtml(row.category || 'Uncategorized')}</td><td>${escapeHtml(row.sku || '—')}</td><td class="numeric">${money(row.retail_price)}</td><td>${quantity(row.stock_qty)}</td><td><span class="status ${Number(row.stock_qty) <= 0 ? 'status-danger' : lowStock(row) ? 'status-warning' : 'status-success'}">${Number(row.stock_qty) <= 0 ? 'Out of stock' : lowStock(row) ? 'Low stock' : 'In stock'}</span></td><td class="module-actions"><button class="btn btn-primary btn-small" type="button" data-add-to-cart="${row.id}" ${Number(row.stock_qty) <= 0 ? 'disabled' : ''}>Add</button>${actions(row)}</td></tr>`).join('') || noRows(7, 'No products match these filters.'), 'module-table');
-    byId('products-pagination').innerHTML = `<span>Showing ${visible.length} of ${all.length} loaded products</span>${visible.length < all.length ? '<button class="btn btn-outline btn-small" id="load-more-products" type="button">Show more</button>' : ''}${moreProductsAvailable ? '<button class="btn btn-outline btn-small" id="load-next-catalog" type="button">Load next 1,000 products</button>' : ''}`;
+    byId('products-pagination').innerHTML = `<span>Showing ${visible.length} of ${all.length} loaded products</span>${visible.length < all.length ? '<button class="btn btn-outline btn-small" id="load-more-products" type="button">Show more</button>' : ''}${moreProductsAvailable ? '<button class="btn btn-outline btn-small" id="load-next-catalog" type="button">Load next 100 products</button>' : ''}`;
     byId('product-cart-count').textContent = String(cart.reduce((sum, line) => sum + Number(line.quantity), 0));
     paintCart();
     byId('load-more-products')?.addEventListener('click', () => { currentPage += 1; paint(); });
@@ -278,11 +278,11 @@ async function renderProducts(context) {
       const button = event.currentTarget;
       setBusy(button, true, 'Loading…');
       try {
-        const next = await queryRows('products', 'id, sku, name, category, unit, cost_price, retail_price, image_path, stock_qty, min_stock, is_active, updated_at', (q) => q.order('name').range(nextProductOffset, nextProductOffset + 999));
+        const next = await queryRows('products', 'id, sku, name, category, unit, cost_price, retail_price, image_path, stock_qty, min_stock, is_active, updated_at', (q) => q.order('name').range(nextProductOffset, nextProductOffset + 99));
         const knownIds = new Set(rows.map((row) => row.id));
         rows.push(...next.filter((row) => !knownIds.has(row.id)));
         nextProductOffset += next.length;
-        moreProductsAvailable = next.length === 1000;
+        moreProductsAvailable = next.length === 100;
         syncCategoryOptions();
         paint();
       } catch (error) {
@@ -354,7 +354,7 @@ async function renderProducts(context) {
     byId('catalog-clear-cart').disabled = true;
     content.querySelectorAll('[data-add-to-cart], [data-edit-product], [data-toggle-product], [data-cart-qty], [data-remove-product]').forEach((control) => { control.disabled = true; });
     byId('catalog-complete-sale').textContent = pendingCheckout.blocked ? 'Review saved checkout' : 'Retry previous checkout';
-    byId('catalog-complete-sale').disabled = pendingCheckout.blocked || !cart.length;
+    byId('catalog-complete-sale').disabled = pendingCheckout.blocked ? false : !cart.length;
   }
   const resetFilters = () => { currentPage = 0; paint(); };
   content.querySelectorAll('#product-search, #product-category, #product-stock-filter, #product-sort').forEach((control) => control.addEventListener(control.id === 'product-search' ? 'input' : 'change', resetFilters));
@@ -452,7 +452,7 @@ async function renderProducts(context) {
       if (!window.confirm('Check Sales History first. If the saved sale is listed, do not retry it. Clear this old retry record only after you have checked the history.')) return;
       localStorage.removeItem(checkoutKey(user.id));
       pendingCheckout = null;
-      paintCart();
+      paint();
       return showAlert('page-alert', 'Saved retry cleared. Review the cart and submit the sale only if Sales History confirms it was not already completed.', 'success');
     }
     if (!cart.length) return;
@@ -535,7 +535,10 @@ async function renderProducts(context) {
         toast(`Sale completed, but stock could not be refreshed from the database. ${error.message}`, 'error');
       });
     } catch (error) {
-      showAlert('page-alert', `Sale was not completed. ${error.message}`);
+      const fetchFailed = error?.name === 'TypeError' && /fetch/i.test(error.message || '');
+      showAlert('page-alert', fetchFailed
+        ? 'Could not reach Supabase, so the sale result is unknown. Do not start a new sale. Your cart and checkout request are saved; use “Retry previous checkout” to safely check or finish this same sale, or verify Sales History first.'
+        : `Sale was not completed. ${error.message}`);
       if (!pendingCheckout) paint();
       setBusy(button, false);
       paintCart();
@@ -669,6 +672,9 @@ async function renderProducts(context) {
   }
   syncCategoryOptions();
   paint();
+  if (pendingCheckout?.blocked) {
+    showAlert('page-alert', 'Cart actions are paused because an older checkout needs review. Check Sales History, then choose “Review saved checkout” to unlock the catalogue.');
+  }
 }
 
 async function toggleProduct(row, button, rows = null, repaint = null) {

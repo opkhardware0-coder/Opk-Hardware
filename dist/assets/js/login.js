@@ -40,10 +40,11 @@ function safeNext() {
   return /^\/[A-Za-z0-9\-_/]*$/.test(n) && !n.startsWith('//') && n !== '/login' ? n : '/dashboard';
 }
 
-function isRecoveryCallback() {
+function isAccountSetupCallback() {
   const query = new URLSearchParams(location.search);
   const hash = new URLSearchParams(location.hash.slice(1));
-  return query.has('code') || query.get('type') === 'recovery' || hash.get('type') === 'recovery';
+  return query.has('code') || ['invite', 'recovery', 'signup', 'magiclink'].includes(query.get('type'))
+    || ['invite', 'recovery', 'signup', 'magiclink'].includes(hash.get('type'));
 }
 
 async function init() {
@@ -56,7 +57,7 @@ async function init() {
   const resetRequested = new URLSearchParams(location.search).get('reset') === '1';
   if (resetRequested) show('reset');
 
-  let recoveryFlow = isRecoveryCallback();
+  let recoveryFlow = isAccountSetupCallback();
   if (recoveryFlow) show('newpw');
 
   // Password recovery can arrive as a query-string code (PKCE) or URL hash.

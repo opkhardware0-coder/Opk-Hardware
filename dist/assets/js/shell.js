@@ -22,8 +22,7 @@ function modulePageFromUrl(url) {
 
 export async function mountShell({ page, title, live = NAV.map((n) => n.id) }) {
   const root = document.getElementById('app');
-  root.setAttribute('aria-busy', 'true');
-  root.innerHTML = '<div class="workspace-loading" role="status"><span class="spinner" aria-hidden="true"></span><span>Opening your workspace…</span></div>';
+  const authStart = performance.now();
   let auth;
   try {
     auth = await requireAuth();
@@ -90,16 +89,14 @@ export async function mountShell({ page, title, live = NAV.map((n) => n.id) }) {
   document.getElementById('logout').addEventListener('click', signOut);
 
   const updateModuleRoute = (url) => {
-    const nextPage = modulePageFromUrl(url);
-    if (!nextPage) {
-      location.reload();
-      return;
-    }
-    const nextTitle = PAGE_TITLES.get(nextPage) || 'Products & Categories';
+    const nextPage = modulePageFromUrl(url) || 'dashboard';
+    const nextTitle = PAGE_TITLES.get(nextPage) || 'Dashboard';
     document.body.dataset.page = nextPage;
-    document.querySelector('.topbar h1').textContent = nextTitle;
+    const titleEl = document.querySelector('.topbar h1');
+    if (titleEl) titleEl.textContent = nextTitle;
     document.querySelectorAll('[data-module-page]').forEach((link) => {
-      if (link.dataset.modulePage === nextPage) link.setAttribute('aria-current', 'page');
+      const isCurrent = link.dataset.modulePage === nextPage;
+      if (isCurrent) link.setAttribute('aria-current', 'page');
       else link.removeAttribute('aria-current');
     });
     shell.classList.remove('nav-open');
