@@ -10,16 +10,46 @@ function businessDate(value) {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Accra' }).format(new Date(value));
 }
 
-try {
-  const ctx = await mountShell({ page: 'dashboard', title: 'Dashboard' });
-  if (ctx) await render(ctx);
-} catch (error) {
-  const root = document.getElementById('app');
-  root.removeAttribute('aria-busy');
-  root.innerHTML = `<main class="content"><div class="alert alert-error" role="alert">Dashboard could not be opened. ${escapeHtml(error.message || 'Please reload and try again.')}</div><p><a href="/login">Return to sign in</a></p></main>`;
+if (!window.__opkContext) {
+  try {
+    const ctx = await mountShell({ page: 'dashboard', title: 'Dashboard' });
+    if (ctx) {
+      window.__opkContext = ctx;
+      window.__opkModuleNavigation = true;
+      let activePage = 'dashboard';
+      let routeVersion = 0;
+      const routeHandler = async (event) => {
+        const nextPage = event.detail.page;
+        activePage = nextPage;
+        const version = ++routeVersion;
+        try {
+          if (nextPage === 'dashboard') {
+            await renderDashboard({ ...ctx, isCurrent: () => activePage === nextPage && routeVersion === version });
+          } else if (nextPage === 'settings') {
+            const { renderSettings } = await import('./settings.js');
+            if (activePage === nextPage && routeVersion === version) renderSettings(ctx);
+          } else {
+            window.removeEventListener('opk:navigate', routeHandler);
+            await import('./modules.js');
+          }
+        } catch (error) {
+          window.addEventListener('opk:navigate', routeHandler);
+          if (activePage === nextPage && routeVersion === version) {
+            ctx.content.innerHTML = `<div class="alert alert-error" role="alert">Page could not be opened. ${escapeHtml(error.message || 'Please try again.')}</div>`;
+          }
+        }
+      };
+      window.addEventListener('opk:navigate', routeHandler);
+      await renderDashboard(ctx);
+    }
+  } catch (error) {
+    const root = document.getElementById('app');
+    root.removeAttribute('aria-busy');
+    root.innerHTML = `<main class="content"><div class="alert alert-error" role="alert">Dashboard could not be opened. ${escapeHtml(error.message || 'Please reload and try again.')}</div><p><a href="/login">Return to sign in</a></p></main>`;
+  }
 }
 
-async function render({ content, user, profile }) {
+export async function renderDashboard({ content, user, profile, isCurrent = () => true }) {
   const name = profile?.full_name || user.user_metadata?.full_name || user.email?.split('@')[0] || 'there';
   const manager = isManager(profile);
   const start = startOfTodayAccra();
@@ -45,9 +75,10 @@ async function render({ content, user, profile }) {
   const customerCount = supabase.from('customers').select('id', { count: 'exact', head: true });
   const productCount = supabase.from('products').select('id', { count: 'exact', head: true }).eq('is_active', true);
   const salesQuery = manager
-    ? supabase.from('sales').select('receipt_no, grand_total, created_at, status').gte('created_at', weekStart).neq('status', 'void').order('created_at', { ascending: false }).limit(1000)
+    ? supabase.from('sales').select('receipt_no, grand_total, created_at, status').gte('created_at', weekStart).eq('status', 'completed').order('created_at', { ascending: false }).limit(1000)
     : Promise.resolve(null);
   const [customers, products, sales] = await Promise.all([customerCount, productCount, salesQuery]);
+  if (!isCurrent()) return;
 
   if (customers.error) {
     showMessage(`Could not load the customer count. ${customers.error.message}`);

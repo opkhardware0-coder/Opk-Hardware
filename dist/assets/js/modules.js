@@ -2,21 +2,31 @@ import { mountShell } from './shell.js';
 import { supabase } from './supabase.js';
 import { escapeHtml, formatDateTime, formatMoney, toast } from './ui.js';
 
-const page = document.body.dataset.page;
+let page = document.body.dataset.page;
 const TITLES = {
+  dashboard: 'Dashboard',
   pos: 'Products & Categories',
   products: 'Products & Categories',
   inventory: 'Inventory',
   sales: 'Sales History',
   reports: 'Reports',
+  settings: 'Settings',
 };
 const LIVE_PAGES = Object.keys(TITLES).concat('dashboard', 'settings');
-const ctx = await mountShell({ page, title: TITLES[page] || 'OPK HARDWARES', live: LIVE_PAGES });
+const ctx = window.__opkContext || await mountShell({ page, title: TITLES[page] || 'OPK HARDWARES', live: LIVE_PAGES });
+if (ctx) window.__opkContext = ctx;
+let activeModulePage = null;
+let renderVersion = 0;
+let activeModuleUrl = '';
+let activePageReady = false;
+const pageCache = new Map();
 
 const canManage = (profile) => ['admin', 'manager'].includes(profile?.role);
 const byId = (id) => document.getElementById(id);
 const inputValue = (form, name) => new FormData(form).get(name)?.toString().trim() || '';
 const money = (value) => formatMoney(Number(value || 0));
+const cents = (value) => Math.round((Number(value) + Number.EPSILON) * 100);
+const lineTotalCents = (line, product) => cents(Number(line.quantity) * Number(product.retail_price));
 const quantity = (value) => new Intl.NumberFormat('en-GH', { maximumFractionDigits: 3 }).format(Number(value || 0));
 const dateTime = (value) => escapeHtml(formatDateTime(value));
 const unitLabel = (value) => escapeHtml(value || 'each');
@@ -159,15 +169,17 @@ function openDialog(id) {
 }
 
 async function renderProducts(context) {
-  const { content, profile, user } = context;
+  const { content, profile, user, isCurrent = () => true } = context;
   content.innerHTML = `${pageIntro('PRODUCT CATALOG', 'Products & Categories', 'Loading the catalogue…')}<section class="module-card"><div class="sales-chart-loading" role="status"><span class="spinner" aria-hidden="true"></span> Loading products…</div></section>`;
   let rows;
   try {
     rows = await queryRows('products', 'id, sku, name, category, unit, cost_price, retail_price, image_path, stock_qty, min_stock, is_active, updated_at', (q) => q.order('name').range(0, 999));
   } catch (error) {
+    if (!isCurrent()) return;
     showLoadError(content, 'Products & Categories', error);
     return;
   }
+  if (!isCurrent()) return;
   let nextProductOffset = rows.length;
   let pendingCheckout = readCheckoutAttempt(user.id);
   if (pendingCheckout?.payload?.p_items) {
@@ -177,9 +189,11 @@ async function renderProducts(context) {
       try {
         rows.push(...await queryRows('products', 'id, sku, name, category, unit, cost_price, retail_price, image_path, stock_qty, min_stock, is_active, updated_at', (q) => q.in('id', missingIds)));
       } catch (error) {
+        if (!isCurrent()) return;
         showLoadError(content, 'Products & Categories', error);
         return;
       }
+      if (!isCurrent()) return;
     }
   }
   const manager = canManage(profile);
@@ -189,6 +203,8 @@ async function renderProducts(context) {
   let moreProductsAvailable = rows.length === 1000;
   let customersLoaded = false;
   let customersLoading = false;
+  let customerRows = [];
+  let completedSale = false;
   let currentPage = 0;
   let view = localStorage.getItem('opk_products_view') === 'list' ? 'list' : 'grid';
   const pageSize = 24;
@@ -281,14 +297,45 @@ async function renderProducts(context) {
     const lines = cart.map((line) => {
       const product = rows.find((row) => row.id === line.id);
       if (!product) return '';
-      return `<div class="cart-line"><div class="cart-line-title"><strong>${escapeHtml(product.name)}</strong><small>${money(productPrice(product))} / ${unitLabel(product.unit)}</small></div><label class="sr-only" for="catalog-qty-${product.id}">Quantity for ${escapeHtml(product.name)}</label><input class="input cart-qty" id="catalog-qty-${product.id}" data-cart-qty="${product.id}" type="number" min=".001" max="${product.stock_qty}" step=".001" value="${line.quantity}"><strong>${money(Number(line.quantity) * productPrice(product))}</strong><button class="cart-remove" data-remove-product="${product.id}" type="button" aria-label="Remove ${escapeHtml(product.name)}">×</button></div>`;
+      return `<div class="cart-line"><div class="cart-line-title"><strong>${escapeHtml(product.name)}</strong><small>${money(productPrice(product))} / ${unitLabel(product.unit)}</small></div><label class="sr-only" for="catalog-qty-${product.id}">Quantity for ${escapeHtml(product.name)}</label><input class="input cart-qty" id="catalog-qty-${product.id}" data-cart-qty="${product.id}" type="number" min=".001" max="${product.stock_qty}" step=".001" value="${line.quantity}"><strong>${money(lineTotalCents(line, product) / 100)}</strong><button class="cart-remove" data-remove-product="${product.id}" type="button" aria-label="Remove ${escapeHtml(product.name)}">×</button></div>`;
     }).join('');
     byId('catalog-cart-lines').innerHTML = lines || '<div class="empty">Your cart is empty. Add products to start a sale.</div>';
-    const subtotal = cart.reduce((sum, line) => sum + Number(line.quantity) * productPrice(rows.find((row) => row.id === line.id)), 0);
+    const subtotalCents = cart.reduce((sum, line) => sum + lineTotalCents(line, rows.find((row) => row.id === line.id)), 0);
+    const subtotal = subtotalCents / 100;
     const tender = Number(byId('catalog-tendered').value || 0);
+    const tenderCents = cents(tender);
+    const due = Math.max(0, subtotalCents - tenderCents) / 100;
+    const method = byId('catalog-payment').value;
+    const customer = customerRows.find((row) => row.id === byId('catalog-customer').value);
+    const paymentNote = byId('catalog-payment-note');
+    let validationMessage = '';
+    if (!Number.isFinite(tender) || tender < 0 || Math.abs(tender * 100 - Math.round(tender * 100)) > 1e-7) {
+      validationMessage = 'Enter a valid payment amount to the nearest cent.';
+    } else if (method !== 'cash' && tenderCents > subtotalCents) {
+      validationMessage = 'Only cash payments can include change.';
+    } else if (due > 0 && !customer) {
+      validationMessage = `Select a customer to record the ${money(due)} balance due.`;
+    }
+    if (validationMessage) {
+      paymentNote.textContent = validationMessage;
+      paymentNote.className = 'alert alert-warning catalog-payment-note';
+      paymentNote.hidden = false;
+    } else if (due > 0 && customer) {
+      const previousBalance = Number(customer.balance || 0);
+      const newBalance = Math.round((previousBalance + due) * 100) / 100;
+      paymentNote.textContent = previousBalance > 0
+        ? `${customer.name} owes ${money(previousBalance)}; this sale adds ${money(due)} (new balance ${money(newBalance)}).`
+        : `Balance due ${money(due)} will be added to ${customer.name}'s account.`;
+      paymentNote.className = 'alert alert-info catalog-payment-note';
+      paymentNote.hidden = false;
+    } else {
+      paymentNote.hidden = true;
+      paymentNote.textContent = '';
+    }
     byId('catalog-cart-total').textContent = money(subtotal);
-    byId('catalog-cart-due').textContent = money(Math.max(0, subtotal - tender));
-    byId('catalog-complete-sale').disabled = !cart.length;
+    byId('catalog-cart-due').textContent = money(due);
+    byId('catalog-complete-sale').disabled = !cart.length || Boolean(validationMessage);
+    byId('catalog-complete-sale').textContent = cart.length ? 'Complete sale' : completedSale ? 'Sale completed' : 'Complete sale';
     writeCart(user.id, cart);
     applyPendingCheckoutState();
   };
@@ -298,7 +345,7 @@ async function renderProducts(context) {
       byId('catalog-payment').disabled = false;
       byId('catalog-tendered').disabled = false;
       byId('catalog-clear-cart').disabled = false;
-      byId('catalog-complete-sale').textContent = 'Complete sale';
+      byId('catalog-complete-sale').textContent = cart.length ? 'Complete sale' : completedSale ? 'Sale completed' : 'Complete sale';
       return;
     }
     byId('catalog-customer').disabled = true;
@@ -323,16 +370,20 @@ async function renderProducts(context) {
   }
   byId('open-product-cart').addEventListener('click', () => {
     openDialog('product-cart-dialog');
+    paintCart();
     if (customersLoaded || customersLoading) return;
     customersLoading = true;
-    byId('catalog-customer').innerHTML = '<option value="">Loading customers…</option>';
+    const customerSelect = byId('catalog-customer');
+    customerSelect.innerHTML = '<option value="">Loading customers…</option>';
     queryRows('customers', 'id, name, phone, balance', (q) => q.order('name').limit(1000)).then((loadedCustomers) => {
       customersLoaded = true;
-      byId('catalog-customer').innerHTML = `<option value="">Walk-in customer</option>${loadedCustomers.map((row) => `<option value="${row.id}">${escapeHtml(row.name)}${Number(row.balance) > 0 ? ` · owing ${money(row.balance)}` : ''}</option>`).join('')}`;
-      if (pendingCheckout?.payload?.p_customer_id) byId('catalog-customer').value = pendingCheckout.payload.p_customer_id;
+      customerRows = loadedCustomers;
+      customerSelect.innerHTML = `<option value="">Walk-in customer</option>${loadedCustomers.map((row) => `<option value="${row.id}">${escapeHtml(row.name)}${Number(row.balance) > 0 ? ` · owing ${money(row.balance)}` : ''}</option>`).join('')}`;
+      if (pendingCheckout?.payload?.p_customer_id) customerSelect.value = pendingCheckout.payload.p_customer_id;
+      if (activeModulePage === 'products' && byId('catalog-cart-lines')) paintCart();
     }).catch((error) => {
-      byId('catalog-customer').innerHTML = '<option value="">Walk-in customer</option>';
-      showAlert('page-alert', `Customer list could not be loaded. ${error.message}`);
+      customerSelect.innerHTML = '<option value="">Walk-in customer</option>';
+      if (activeModulePage === 'products') showAlert('page-alert', `Customer list could not be loaded. ${error.message}`);
     }).finally(() => { customersLoading = false; });
   });
   byId('products-table').addEventListener('click', async (event) => {
@@ -344,6 +395,7 @@ async function renderProducts(context) {
         if (Number(line.quantity) + 1 > Number(product.stock_qty)) return showAlert('page-alert', `Only ${quantity(product.stock_qty)} ${product.unit} of ${product.name} are in stock.`);
         line.quantity = Number(line.quantity) + 1;
       } else cart.push({ id: product.id, quantity: 1 });
+      completedSale = false;
       paint();
       return;
     }
@@ -387,6 +439,7 @@ async function renderProducts(context) {
       if (event.target.value === 'credit') byId('catalog-tendered').value = '0';
       paintCart();
     }
+    if (event.target.id === 'catalog-customer') paintCart();
   });
   byId('catalog-tendered').addEventListener('input', paintCart);
   byId('catalog-clear-cart').addEventListener('click', () => {
@@ -407,10 +460,20 @@ async function renderProducts(context) {
     const method = byId('catalog-payment').value;
     const tendered = Number(byId('catalog-tendered').value || 0);
     const customerId = byId('catalog-customer').value || null;
-    const total = cart.reduce((sum, line) => sum + Number(line.quantity) * productPrice(rows.find((row) => row.id === line.id)), 0);
-    if (!Number.isFinite(tendered) || tendered < 0) return showAlert('page-alert', 'Enter a valid non-negative amount received.');
-    if ((total > tendered || method === 'credit') && !customerId) return showAlert('page-alert', 'Select a customer when recording credit or a partial payment.');
-    if (!window.confirm(`Complete this sale for ${money(total)}?`)) return;
+    const totalCents = cart.reduce((sum, line) => sum + lineTotalCents(line, rows.find((row) => row.id === line.id)), 0);
+    const total = totalCents / 100;
+    const tenderedCents = cents(tendered);
+    const due = Math.max(0, totalCents - tenderedCents) / 100;
+    if (!Number.isFinite(tendered) || tendered < 0 || Math.abs(tendered * 100 - Math.round(tendered * 100)) > 1e-7) return showAlert('page-alert', 'Enter a valid payment amount to the nearest cent.');
+    if (method !== 'cash' && tenderedCents > totalCents) return showAlert('page-alert', 'Only cash payments can include change.');
+    if (due > 0 && !customerId) return showAlert('page-alert', `Select a customer to record the ${money(due)} balance due.`);
+    const customer = customerRows.find((row) => row.id === customerId);
+    const paidNow = Math.min(total, tendered);
+    const change = method === 'cash' ? Math.max(0, tendered - total) : 0;
+    const confirmation = due > 0 && customer
+      ? `Complete sale for ${money(total)}? Paid ${money(paidNow)}; ${money(due)} will be added to ${customer.name}'s existing balance of ${money(customer.balance)}.`
+      : `Complete sale for ${money(total)}? Paid ${money(paidNow)}${change > 0 ? `; change ${money(change)}` : ''}.`;
+    if (!window.confirm(confirmation)) return;
     const payload = {
       p_customer_id: customerId,
       p_items: cart.map(({ id, quantity: qty }) => ({ product_id: id, quantity: qty })),
@@ -422,6 +485,7 @@ async function renderProducts(context) {
       return showAlert('page-alert', 'A previous checkout has an uncertain result. Reload this page to retry it safely, then verify Sales History before starting another sale.');
     }
     setBusy(button, true, 'Completing sale…');
+    window.__opkCheckoutInProgress = true;
     try {
       pendingCheckout = pendingCheckout || { request_id: crypto.randomUUID(), payload };
       localStorage.setItem(checkoutKey(user.id), JSON.stringify(pendingCheckout));
@@ -439,31 +503,44 @@ async function renderProducts(context) {
         throw error;
       }
       const result = Array.isArray(data) ? data[0] : data;
-      let stockRefreshError;
-      try {
-        const latestStock = await queryRows('products', 'id, stock_qty', (q) => q.in('id', cart.map((line) => line.id)));
-        latestStock.forEach((stock) => {
-          const product = rows.find((row) => row.id === stock.id);
-          if (product) product.stock_qty = stock.stock_qty;
-        });
-      } catch (error) {
-        stockRefreshError = error;
+      const completedLines = cart.map((line) => ({ ...line }));
+      completedLines.forEach((line) => {
+        const product = rows.find((row) => row.id === line.id);
+        if (product) product.stock_qty = Math.max(0, Number(product.stock_qty) - Number(line.quantity));
+      });
+      if (customer && Number(result.balance_due) > 0) {
+        customer.balance = Math.round((Number(customer.balance || 0) + Number(result.balance_due)) * 100) / 100;
       }
       cart = [];
       localStorage.removeItem(cartKey(user.id));
       localStorage.removeItem(checkoutKey(user.id));
       pendingCheckout = null;
+      completedSale = true;
       byId('product-cart-dialog').close();
       byId('catalog-tendered').value = '0';
       paint();
+      window.dispatchEvent(new Event('opk:data-changed'));
+      button.textContent = 'Sale completed';
+      button.disabled = true;
       showAlert('page-alert', `Sale ${result.receipt_no} completed. Paid ${money(result.amount_paid)}, balance ${money(result.balance_due)}, change ${money(result.change_due)}.`, 'success');
       toast(`Sale ${result.receipt_no} completed.`, 'success');
-      if (stockRefreshError) toast(`Sale completed, but current stock could not be refreshed. Reload before starting another sale. ${stockRefreshError.message}`, 'error');
-      setBusy(button, false);
+      const soldProductIds = completedLines.map((line) => line.id);
+      queryRows('products', 'id, stock_qty', (q) => q.in('id', soldProductIds)).then((latestStock) => {
+        latestStock.forEach((stock) => {
+          const product = rows.find((row) => row.id === stock.id);
+          if (product) product.stock_qty = stock.stock_qty;
+        });
+        if (activeModulePage === 'products' && byId('product-cart-count')) paint();
+      }).catch((error) => {
+        toast(`Sale completed, but stock could not be refreshed from the database. ${error.message}`, 'error');
+      });
     } catch (error) {
       showAlert('page-alert', `Sale was not completed. ${error.message}`);
       if (!pendingCheckout) paint();
       setBusy(button, false);
+      paintCart();
+    } finally {
+      window.__opkCheckoutInProgress = false;
     }
   });
   if (manager) {
@@ -647,6 +724,7 @@ function productCartDialog(customers) {
       <label class="field"><span>Payment method</span><select class="input" id="catalog-payment"><option value="cash">Cash</option><option value="mobile_money">Mobile money</option><option value="card">Card</option><option value="bank_transfer">Bank transfer</option><option value="credit">Credit (no payment today)</option></select></label>
       <label class="field" id="catalog-tendered-wrap"><span>Amount received (GHS)</span><input class="input" id="catalog-tendered" type="number" min="0" step=".01" value="0"></label>
     </div>
+    <div id="catalog-payment-note" class="catalog-payment-note" role="status" aria-live="polite" hidden></div>
     <div id="catalog-cart-lines"></div>
     <div class="pos-total-row"><span>Subtotal</span><strong id="catalog-cart-total">${money(0)}</strong></div>
     <div class="pos-total-row"><span>Estimated balance due</span><strong id="catalog-cart-due">${money(0)}</strong></div>
@@ -721,6 +799,11 @@ async function renderCustomers({ content, profile }) {
     const button = form.querySelector('[type="submit"]');
     const amount = Number(inputValue(form, 'amount'));
     if (!Number.isFinite(amount) || amount <= 0) return showAlert('page-alert', 'Enter a payment amount greater than zero.');
+    const customer = rows.find((row) => row.id === inputValue(form, 'customer_id'));
+    if (!customer || Number(customer.balance) <= 0) return showAlert('page-alert', 'This customer has no outstanding balance to pay.');
+    if (Math.round(amount * 100) > Math.round(Number(customer.balance) * 100)) {
+      return showAlert('page-alert', `Amount exceeds the customer's outstanding balance of ${money(customer.balance)}. Enter that amount or less.`);
+    }
     setBusy(button, true);
     try {
       const { error } = await supabase.rpc('record_customer_payment', {
@@ -863,16 +946,18 @@ function openSupplierDialog(supplier = null) {
   openDialog('supplier-dialog');
 }
 
-async function renderInventory({ content, profile }) {
+async function renderInventory({ content, profile, isCurrent = () => true }) {
   let products;
   let movements = [];
   try {
     products = await queryRows('products', 'id, sku, name, category, unit, stock_qty, min_stock, is_active', (q) => q.eq('is_active', true).order('name').limit(1000));
     if (canManage(profile)) movements = await queryRows('inventory_movements', 'id, product_name, movement_type, quantity_change, quantity_after, reason, created_at', (q) => q.order('created_at', { ascending: false }).limit(50));
   } catch (error) {
+    if (!isCurrent()) return;
     showLoadError(content, 'Inventory', error);
     return;
   }
+  if (!isCurrent()) return;
   const manager = canManage(profile);
   const low = products.filter((row) => Number(row.stock_qty) <= Number(row.min_stock));
   content.innerHTML = `${pageIntro('STOCK CONTROL', 'Inventory', 'Review on-hand quantities and low-stock thresholds.', manager ? '<button class="btn btn-primary" id="adjust-stock">Adjust stock</button>' : '')}${alertMarkup()}<div class="cards module-stats"><article class="stat"><div class="k">Active products</div><div class="v">${products.length}</div></article><article class="stat"><div class="k">Units in stock</div><div class="v">${quantity(products.reduce((sum, row) => sum + Number(row.stock_qty), 0))}</div></article><article class="stat warn"><div class="k">At / below minimum</div><div class="v">${low.length}</div></article></div><section class="module-card"><div class="module-toolbar"><label class="module-search-label" for="inventory-search">Search inventory</label><input class="input module-search" id="inventory-search" type="search" placeholder="Name, SKU, category…"></div><div id="inventory-table"></div></section>${manager ? `<section class="module-card"><h3 class="module-section-title">Recent stock movements</h3><div id="movement-table"></div></section>${adjustmentDialog(products)}` : canWriteNotice(profile, 'stock levels')}`;
@@ -1109,7 +1194,7 @@ async function renderPos({ content, user }) {
   });
 }
 
-async function renderSales({ content, profile }) {
+async function renderSales({ content, profile, isCurrent = () => true }) {
   content.innerHTML = `${pageIntro('TRANSACTION RECORDS', 'Sales History', 'Loading recent sales and daily totals…')}<section class="module-card"><div class="sales-chart-loading" role="status"><span class="spinner" aria-hidden="true"></span> Loading sales…</div></section>`;
   let rows;
   let customers;
@@ -1124,9 +1209,11 @@ async function renderSales({ content, profile }) {
       manager ? queryRows('expenses', 'amount, created_at', (q) => q.order('created_at', { ascending: false }).limit(1000)) : Promise.resolve([]),
     ]);
   } catch (error) {
+    if (!isCurrent()) return;
     showLoadError(content, 'Sales History', error);
     return;
   }
+  if (!isCurrent()) return;
   const customerNames = new Map();
   const staffNames = new Map();
   customers.forEach((row) => customerNames.set(row.id, row.name));
@@ -1354,7 +1441,7 @@ function expenseCategoryTable(rows) {
   return tableMarkup(['Category', 'Total'], [...totals.entries()].sort((a, b) => b[1] - a[1]).map(([category, total]) => `<tr><td>${escapeHtml(category)}</td><td class="numeric">${money(total)}</td></tr>`).join('') || noRows(2, 'No expenses in this date range.'));
 }
 
-async function renderReports({ content, profile }) {
+async function renderReports({ content, profile, isCurrent = () => true }) {
   const manager = canManage(profile);
   content.innerHTML = `${pageIntro('BUSINESS OVERVIEW', 'Reports', 'Sales, recorded expenses, and inventory are shown separately. Profit is not inferred.')}${alertMarkup()}<section class="module-card"><div class="module-toolbar"><label class="date-filter">From <input class="input" id="report-from" type="date"></label><label class="date-filter">To <input class="input" id="report-to" type="date"></label><button class="btn btn-outline btn-small" id="export-report-sales" type="button">Export filtered sales CSV</button></div><div id="report-output"><div class="sales-chart-loading" role="status"><span class="spinner" aria-hidden="true"></span> Loading reports…</div></div></section>`;
   const [salesResult, itemsResult, productsResult, expensesResult, movementsResult] = await Promise.allSettled([
@@ -1364,6 +1451,7 @@ async function renderReports({ content, profile }) {
     manager ? queryRows('expenses', 'amount, category, created_at', (q) => q.order('created_at', { ascending: false }).limit(2000)) : Promise.resolve([]),
     manager ? queryRows('inventory_movements', 'product_name, movement_type, quantity_change, quantity_after, reason, created_by, created_at', (q) => q.order('created_at', { ascending: false }).limit(2000)) : Promise.resolve([]),
   ]);
+  if (!isCurrent()) return;
   const failures = [];
   const readResult = (result, label, fallback = []) => {
     if (result.status === 'fulfilled') return result.value;
@@ -1428,9 +1516,54 @@ if (ctx) {
     inventory: renderInventory,
     sales: renderSales,
     reports: renderReports,
+    dashboard: async (context) => {
+      const { renderDashboard } = await import('./dashboard.js');
+      return renderDashboard(context);
+    },
+    settings: async (context) => {
+      const { renderSettings } = await import('./settings.js');
+      return renderSettings(context);
+    },
   };
-  const render = renderers[page];
-  if (render) await render(ctx);
+  window.__opkModuleNavigation = true;
+  const showModulePage = async (nextPage, nextUrl = location.href) => {
+    const render = renderers[nextPage];
+    if (!render) return;
+    const samePage = activeModulePage === nextPage;
+    if (samePage && activeModuleUrl === nextUrl) return;
+    if (!samePage && activePageReady && ctx.content.hasChildNodes()) {
+      ctx.content.querySelectorAll('dialog[open]').forEach((dialog) => dialog.close());
+      const fragment = document.createDocumentFragment();
+      while (ctx.content.firstChild) fragment.appendChild(ctx.content.firstChild);
+      pageCache.set(activeModulePage, { fragment, savedAt: Date.now(), url: activeModuleUrl });
+    }
+    activeModulePage = nextPage;
+    page = nextPage;
+    activeModuleUrl = nextUrl;
+    const version = ++renderVersion;
+    if (!samePage) {
+      const cached = pageCache.get(nextPage);
+      if (cached && cached.url === nextUrl && Date.now() - cached.savedAt < 15000) {
+        ctx.content.replaceChildren(cached.fragment);
+        cached.savedAt = Date.now();
+        activePageReady = true;
+        return;
+      }
+      pageCache.delete(nextPage);
+    }
+    activePageReady = false;
+    try {
+      await render({ ...ctx, isCurrent: () => activeModulePage === nextPage && renderVersion === version });
+      if (activeModulePage === nextPage && renderVersion === version) activePageReady = true;
+    } catch (error) {
+      if (activeModulePage === nextPage && renderVersion === version) showLoadError(ctx.content, TITLES[nextPage], error);
+    }
+  };
+  window.addEventListener('opk:navigate', (event) => {
+    void showModulePage(event.detail.page, event.detail.url.href);
+  });
+  window.addEventListener('opk:data-changed', () => pageCache.clear());
+  await showModulePage(page, location.href);
 }
 
 async function renderStaff({ content, user, profile }) {

@@ -65,7 +65,7 @@ function hideMessage(el) {
   el.textContent = '';
 }
 
-function renderSettings({ user, profile, content }) {
+export function renderSettings({ user, profile, content }) {
   const displayName = profile?.full_name || user.user_metadata?.full_name || 'Name not set';
   const role = profile?.role || 'unassigned';
   const exportTables = canManage(profile) ? [...STAFF_EXPORT_TABLES, ...MANAGER_EXPORT_TABLES] : STAFF_EXPORT_TABLES;
@@ -540,11 +540,41 @@ async function loadStaffProfiles({ user, profile }) {
   }
 }
 
-try {
-  const ctx = await mountShell({ page: 'settings', title: 'Settings' });
-  if (ctx) renderSettings(ctx);
-} catch (error) {
-  const root = document.getElementById('app');
-  root.removeAttribute('aria-busy');
-  root.innerHTML = `<main class="content"><div class="alert alert-error" role="alert">Settings could not be opened. ${escapeHtml(error.message || 'Please reload and try again.')}</div><p><a href="/dashboard">Return to Dashboard</a></p></main>`;
+if (!window.__opkContext) {
+  try {
+    const ctx = await mountShell({ page: 'settings', title: 'Settings' });
+    if (ctx) {
+      window.__opkContext = ctx;
+      window.__opkModuleNavigation = true;
+      let activePage = 'settings';
+      let routeVersion = 0;
+      const routeHandler = async (event) => {
+        const nextPage = event.detail.page;
+        activePage = nextPage;
+        const version = ++routeVersion;
+        try {
+          if (nextPage === 'settings') {
+            renderSettings(ctx);
+          } else if (nextPage === 'dashboard') {
+            const { renderDashboard } = await import('./dashboard.js');
+            if (activePage === nextPage && routeVersion === version) await renderDashboard(ctx);
+          } else {
+            window.removeEventListener('opk:navigate', routeHandler);
+            await import('./modules.js');
+          }
+        } catch (error) {
+          window.addEventListener('opk:navigate', routeHandler);
+          if (activePage === nextPage && routeVersion === version) {
+            ctx.content.innerHTML = `<div class="alert alert-error" role="alert">Page could not be opened. ${escapeHtml(error.message || 'Please try again.')}</div>`;
+          }
+        }
+      };
+      window.addEventListener('opk:navigate', routeHandler);
+      renderSettings(ctx);
+    }
+  } catch (error) {
+    const root = document.getElementById('app');
+    root.removeAttribute('aria-busy');
+    root.innerHTML = `<main class="content"><div class="alert alert-error" role="alert">Settings could not be opened. ${escapeHtml(error.message || 'Please reload and try again.')}</div><p><a href="/dashboard">Return to Dashboard</a></p></main>`;
+  }
 }

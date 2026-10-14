@@ -12,6 +12,14 @@ export const NAV = [
   { id: 'settings', label: 'Settings', href: '/settings', icon: I('<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.900 4.900l2.100 2.100M17 17l2.100 2.100M4.900 19.100L7 17M17 7l2.100-2.100"/>'), phase: 5 },
 ];
 
+const MODULE_PAGES = new Set(['dashboard', 'products', 'inventory', 'sales', 'reports', 'settings']);
+const PAGE_TITLES = new Map(NAV.map(({ id, label }) => [id, label]));
+
+function modulePageFromUrl(url) {
+  const page = url.pathname.replace(/\/+$/, '').split('/').pop() || 'dashboard';
+  return page === 'pos' ? 'products' : MODULE_PAGES.has(page) ? page : null;
+}
+
 export async function mountShell({ page, title, live = NAV.map((n) => n.id) }) {
   const root = document.getElementById('app');
   root.setAttribute('aria-busy', 'true');
@@ -48,11 +56,17 @@ export async function mountShell({ page, title, live = NAV.map((n) => n.id) }) {
         <button class="sidebar-toggle" id="collapse" aria-label="Collapse sidebar" aria-pressed="${collapsed}">&#9776;</button>
       </div>
       <ul class="nav">
-        ${NAV.map((n) => `<li><a href="${n.href}" title="${n.label}" ${n.id === page ? 'aria-current="page"' : ''}>${n.icon}<span class="label">${n.label}</span>${n.phase && !live.includes(n.id) ? '<span class="soon">Soon</span>' : ''}</a></li>`).join('')}
+        ${NAV.map((n) => `<li><a href="${n.href}" title="${n.label}" ${MODULE_PAGES.has(n.id) ? `data-module-page="${n.id}"` : ''} ${n.id === page ? 'aria-current="page"' : ''}>${n.icon}<span class="label">${n.label}</span>${n.phase && !live.includes(n.id) ? '<span class="soon">Soon</span>' : ''}</a></li>`).join('')}
         <li class="nav-logout"><button id="logout" title="Log out"><svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5V3h4M16 17l5-5-5-5M21 12H9"/></svg><span class="label">Log out</span></button></li>
       </ul>
     </aside>
     <div class="scrim" id="scrim"></div>
+    ${MODULE_PAGES.has(page) || page === 'pos' ? `<nav class="mobile-nav" aria-label="Quick navigation">
+      ${['dashboard', 'products', 'sales', 'inventory'].map((id) => {
+        const item = NAV.find((entry) => entry.id === id);
+        return `<a href="${item.href}" data-module-page="${id}" ${id === page || (id === 'products' && page === 'pos') ? 'aria-current="page"' : ''}>${item.icon}<span>${id === 'dashboard' ? 'Home' : id === 'products' ? 'Products' : id === 'inventory' ? 'Stock' : 'Sales'}</span></a>`;
+      }).join('')}
+    </nav>` : ''}
     <div class="main">
       <header class="topbar">
         <button class="menu-btn" id="menu" aria-label="Open menu">&#9776;</button>
@@ -74,6 +88,44 @@ export async function mountShell({ page, title, live = NAV.map((n) => n.id) }) {
   document.getElementById('menu').addEventListener('click', () => shell.classList.add('nav-open'));
   document.getElementById('scrim').addEventListener('click', () => shell.classList.remove('nav-open'));
   document.getElementById('logout').addEventListener('click', signOut);
+
+  const updateModuleRoute = (url) => {
+    const nextPage = modulePageFromUrl(url);
+    if (!nextPage) {
+      location.reload();
+      return;
+    }
+    const nextTitle = PAGE_TITLES.get(nextPage) || 'Products & Categories';
+    document.body.dataset.page = nextPage;
+    document.querySelector('.topbar h1').textContent = nextTitle;
+    document.querySelectorAll('[data-module-page]').forEach((link) => {
+      if (link.dataset.modulePage === nextPage) link.setAttribute('aria-current', 'page');
+      else link.removeAttribute('aria-current');
+    });
+    shell.classList.remove('nav-open');
+    window.dispatchEvent(new CustomEvent('opk:navigate', { detail: { page: nextPage, url } }));
+  };
+  root.addEventListener('click', (event) => {
+    const link = event.target.closest('a[href]');
+    if (!link || !window.__opkModuleNavigation || event.defaultPrevented
+      || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const url = new URL(link.href, location.href);
+    if (url.origin !== location.origin || !modulePageFromUrl(url)) return;
+    if (window.__opkCheckoutInProgress) {
+      event.preventDefault();
+      const notice = document.getElementById('page-alert');
+      if (notice) {
+        notice.className = 'alert alert-warning';
+        notice.textContent = 'The sale is still processing. Please wait for its confirmation before leaving checkout.';
+        notice.hidden = false;
+      }
+      return;
+    }
+    event.preventDefault();
+    if (url.href !== location.href) history.pushState({}, '', `${url.pathname}${url.search}${url.hash}`);
+    updateModuleRoute(url);
+  });
+  window.addEventListener('popstate', () => updateModuleRoute(new URL(location.href)));
 
   return { user: auth.user, profile, content: document.getElementById('content') };
 }
