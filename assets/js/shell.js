@@ -14,6 +14,33 @@ export const NAV = [
 
 const MODULE_PAGES = new Set(['dashboard', 'products', 'inventory', 'sales', 'reports', 'settings']);
 const PAGE_TITLES = new Map(NAV.map(({ id, label }) => [id, label]));
+const APPEARANCE_KEY = 'opk_appearance';
+const APPEARANCE_OPTIONS = ['light', 'dark', 'system'];
+const systemColorScheme = window.matchMedia('(prefers-color-scheme: dark)');
+
+function applyAppearance(preference = localStorage.getItem(APPEARANCE_KEY) || 'system') {
+  const selected = APPEARANCE_OPTIONS.includes(preference) ? preference : 'system';
+  const resolved = selected === 'system' ? (systemColorScheme.matches ? 'dark' : 'light') : selected;
+  document.documentElement.dataset.theme = resolved;
+  const themeColor = document.querySelector('meta[name="theme-color"]');
+  if (themeColor) themeColor.content = resolved === 'dark' ? '#101722' : '#0B2345';
+  const button = document.getElementById('appearance-toggle');
+  if (button) {
+    button.setAttribute('aria-label', `Appearance: ${selected}`);
+    button.title = `Appearance: ${selected}`;
+    button.innerHTML = resolved === 'dark'
+      ? '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 15.5A8.5 8.5 0 0 1 8.5 3.5 8.5 8.5 0 1 0 20.5 15.5z"/></svg>'
+      : '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>';
+  }
+  document.querySelectorAll('[data-appearance-choice]').forEach((choice) => {
+    choice.setAttribute('aria-pressed', String(choice.dataset.appearanceChoice === selected));
+  });
+}
+
+applyAppearance();
+systemColorScheme.addEventListener('change', () => {
+  if ((localStorage.getItem(APPEARANCE_KEY) || 'system') === 'system') applyAppearance('system');
+});
 
 function modulePageFromUrl(url) {
   const page = url.pathname.replace(/\/+$/, '').split('/').pop() || 'dashboard';
@@ -71,6 +98,14 @@ export async function mountShell({ page, title, live = NAV.map((n) => n.id) }) {
         <button class="menu-btn" id="menu" aria-label="Open menu">&#9776;</button>
         <h1>${escapeHtml(title)}</h1>
         <input class="input search" type="search" id="global-search" placeholder="Search products, receipts, customers…" aria-label="Search">
+        <div class="appearance-control">
+          <button class="appearance-toggle" id="appearance-toggle" type="button" aria-label="Appearance settings" aria-expanded="false" aria-controls="appearance-menu" title="Appearance settings">
+            <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
+          </button>
+          <div class="appearance-menu" id="appearance-menu" role="group" aria-label="Choose appearance" hidden>
+            ${APPEARANCE_OPTIONS.map((option) => `<button type="button" data-appearance-choice="${option}" aria-pressed="false">${option[0].toUpperCase()}${option.slice(1)}</button>`).join('')}
+          </div>
+        </div>
         <div class="user-chip"><div class="avatar" aria-hidden="true">${escapeHtml(initials)}</div>
           <div class="user-meta"><strong>${escapeHtml(name)}</strong><small>${escapeHtml(role.replace('_', ' '))}</small></div></div>
       </header>
@@ -87,6 +122,33 @@ export async function mountShell({ page, title, live = NAV.map((n) => n.id) }) {
   document.getElementById('menu').addEventListener('click', () => shell.classList.add('nav-open'));
   document.getElementById('scrim').addEventListener('click', () => shell.classList.remove('nav-open'));
   document.getElementById('logout').addEventListener('click', signOut);
+  const appearanceToggle = document.getElementById('appearance-toggle');
+  const appearanceMenu = document.getElementById('appearance-menu');
+  appearanceToggle.addEventListener('click', () => {
+    const isExpanded = appearanceToggle.getAttribute('aria-expanded') === 'true';
+    appearanceToggle.setAttribute('aria-expanded', String(!isExpanded));
+    appearanceMenu.hidden = isExpanded;
+  });
+  appearanceMenu.addEventListener('click', (event) => {
+    const choice = event.target.closest('[data-appearance-choice]');
+    if (!choice) return;
+    localStorage.setItem(APPEARANCE_KEY, choice.dataset.appearanceChoice);
+    applyAppearance(choice.dataset.appearanceChoice);
+    appearanceMenu.hidden = true;
+    appearanceToggle.setAttribute('aria-expanded', 'false');
+  });
+  document.addEventListener('click', (event) => {
+    if (event.target.closest('.appearance-control')) return;
+    appearanceMenu.hidden = true;
+    appearanceToggle.setAttribute('aria-expanded', 'false');
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || appearanceMenu.hidden) return;
+    appearanceMenu.hidden = true;
+    appearanceToggle.setAttribute('aria-expanded', 'false');
+    appearanceToggle.focus();
+  });
+  applyAppearance();
 
   const updateModuleRoute = (url) => {
     const nextPage = modulePageFromUrl(url) || 'dashboard';

@@ -427,9 +427,11 @@ function setupReset(userId) {
       localStorage.removeItem('opk_sidebar');
       localStorage.removeItem('opk_settings');
       localStorage.removeItem('opk_products_view');
+      localStorage.removeItem('opk_appearance');
       localStorage.removeItem('opk_last_export');
       localStorage.removeItem(TOUR_KEY);
       localStorage.removeItem(`opk_cart_${userId}`);
+      localStorage.removeItem(`opk_sale_discount_${userId}`);
       if ('caches' in window) {
         const names = await caches.keys();
         const appCaches = names.filter((name) => name.startsWith('opk-pos-shell-'));

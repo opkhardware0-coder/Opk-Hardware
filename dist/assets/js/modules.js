@@ -182,6 +182,7 @@ async function renderProducts(context) {
   if (!isCurrent()) return;
   let nextProductOffset = rows.length;
   let pendingCheckout = readCheckoutAttempt(user.id);
+  const discountStorageKey = `opk_sale_discount_${user.id}`;
   if (pendingCheckout?.payload?.p_items) {
     const loadedIds = new Set(rows.map((row) => row.id));
     const missingIds = pendingCheckout.payload.p_items.map((item) => item.product_id).filter((id) => !loadedIds.has(id));
@@ -200,6 +201,7 @@ async function renderProducts(context) {
   let cart = pendingCheckout?.payload?.p_items
     ? pendingCheckout.payload.p_items.map((item) => ({ id: item.product_id, quantity: Number(item.quantity) }))
     : readCart(user.id, rows);
+  let saleDiscount = Number(pendingCheckout?.payload?.p_discount_amount ?? localStorage.getItem(discountStorageKey) ?? 0);
   let moreProductsAvailable = rows.length === 100;
   let customersLoaded = false;
   let customersLoading = false;
@@ -231,7 +233,9 @@ async function renderProducts(context) {
     const payload = pendingCheckout.payload;
     byId('catalog-payment').value = payload.p_payment_method;
     byId('catalog-tendered').value = String(payload.p_amount_tendered);
-    byId('catalog-tendered-wrap').hidden = payload.p_payment_method === 'credit';
+    byId('catalog-discount').value = String(payload.p_discount_amount ?? 0);
+  } else {
+    byId('catalog-discount').value = String(saleDiscount);
   }
   const activeProducts = () => rows.filter((row) => row.is_active);
   const productPrice = (product) => Number(product.retail_price);
@@ -302,16 +306,29 @@ async function renderProducts(context) {
     byId('catalog-cart-lines').innerHTML = lines || '<div class="empty">Your cart is empty. Add products to start a sale.</div>';
     const subtotalCents = cart.reduce((sum, line) => sum + lineTotalCents(line, rows.find((row) => row.id === line.id)), 0);
     const subtotal = subtotalCents / 100;
+    const discount = Number(byId('catalog-discount').value || 0);
+    const discountCents = cents(discount);
+    const discountValid = Number.isFinite(discount)
+      && discount >= 0
+      && Math.abs(discount * 100 - discountCents) <= 1e-7
+      && discountCents <= subtotalCents;
+    const appliedDiscountCents = discountValid ? discountCents : 0;
+    const totalCents = subtotalCents - appliedDiscountCents;
     const tender = Number(byId('catalog-tendered').value || 0);
     const tenderCents = cents(tender);
-    const due = Math.max(0, subtotalCents - tenderCents) / 100;
+    const due = Math.max(0, totalCents - tenderCents) / 100;
+    const change = Math.max(0, tenderCents - totalCents) / 100;
     const method = byId('catalog-payment').value;
     const customer = customerRows.find((row) => row.id === byId('catalog-customer').value);
     const paymentNote = byId('catalog-payment-note');
     let validationMessage = '';
-    if (!Number.isFinite(tender) || tender < 0 || Math.abs(tender * 100 - Math.round(tender * 100)) > 1e-7) {
+    if (!discountValid) {
+      validationMessage = discount > subtotal
+        ? 'Discount cannot be greater than the sale subtotal.'
+        : 'Enter a valid discount amount to the nearest cent.';
+    } else if (!Number.isFinite(tender) || tender < 0 || Math.abs(tender * 100 - Math.round(tender * 100)) > 1e-7) {
       validationMessage = 'Enter a valid payment amount to the nearest cent.';
-    } else if (method !== 'cash' && tenderCents > subtotalCents) {
+    } else if (method !== 'cash' && tenderCents > totalCents) {
       validationMessage = 'Only cash payments can include change.';
     } else if (due > 0 && !customer) {
       validationMessage = `Select a customer to record the ${money(due)} balance due.`;
@@ -333,7 +350,11 @@ async function renderProducts(context) {
       paymentNote.textContent = '';
     }
     byId('catalog-cart-total').textContent = money(subtotal);
-    byId('catalog-cart-due').textContent = money(due);
+    byId('catalog-cart-discount').textContent = `−${money(appliedDiscountCents / 100)}`;
+    byId('catalog-cart-grand-total').textContent = money(totalCents / 100);
+    byId('catalog-cart-change').textContent = money(change);
+    saleDiscount = discountValid ? discount : 0;
+    if (discountValid) localStorage.setItem(discountStorageKey, String(discount));
     byId('catalog-complete-sale').disabled = !cart.length || Boolean(validationMessage);
     byId('catalog-complete-sale').textContent = cart.length ? 'Complete sale' : completedSale ? 'Sale completed' : 'Complete sale';
     writeCart(user.id, cart);
@@ -344,6 +365,7 @@ async function renderProducts(context) {
       byId('catalog-customer').disabled = false;
       byId('catalog-payment').disabled = false;
       byId('catalog-tendered').disabled = false;
+      byId('catalog-discount').disabled = false;
       byId('catalog-clear-cart').disabled = false;
       byId('catalog-complete-sale').textContent = cart.length ? 'Complete sale' : completedSale ? 'Sale completed' : 'Complete sale';
       return;
@@ -351,6 +373,7 @@ async function renderProducts(context) {
     byId('catalog-customer').disabled = true;
     byId('catalog-payment').disabled = true;
     byId('catalog-tendered').disabled = true;
+    byId('catalog-discount').disabled = true;
     byId('catalog-clear-cart').disabled = true;
     content.querySelectorAll('[data-add-to-cart], [data-edit-product], [data-toggle-product], [data-cart-qty], [data-remove-product]').forEach((control) => { control.disabled = true; });
     byId('catalog-complete-sale').textContent = pendingCheckout.blocked ? 'Review saved checkout' : 'Retry previous checkout';
@@ -442,9 +465,13 @@ async function renderProducts(context) {
     if (event.target.id === 'catalog-customer') paintCart();
   });
   byId('catalog-tendered').addEventListener('input', paintCart);
+  byId('catalog-discount').addEventListener('input', paintCart);
   byId('catalog-clear-cart').addEventListener('click', () => {
     if (!cart.length || !window.confirm('Clear all unsaved items from this device’s cart?')) return;
     cart = [];
+    saleDiscount = 0;
+    byId('catalog-discount').value = '0';
+    localStorage.removeItem(discountStorageKey);
     paint();
   });
   byId('catalog-complete-sale').addEventListener('click', async (event) => {
@@ -460,7 +487,15 @@ async function renderProducts(context) {
     const method = byId('catalog-payment').value;
     const tendered = Number(byId('catalog-tendered').value || 0);
     const customerId = byId('catalog-customer').value || null;
-    const totalCents = cart.reduce((sum, line) => sum + lineTotalCents(line, rows.find((row) => row.id === line.id)), 0);
+    const subtotalCents = cart.reduce((sum, line) => sum + lineTotalCents(line, rows.find((row) => row.id === line.id)), 0);
+    const discount = Number(byId('catalog-discount').value || 0);
+    const discountCents = cents(discount);
+    if (!Number.isFinite(discount) || discount < 0 || Math.abs(discount * 100 - discountCents) > 1e-7 || discountCents > subtotalCents) {
+      return showAlert('page-alert', discount > subtotalCents / 100
+        ? 'Discount cannot be greater than the sale subtotal.'
+        : 'Enter a valid discount amount to the nearest cent.');
+    }
+    const totalCents = subtotalCents - discountCents;
     const total = totalCents / 100;
     const tenderedCents = cents(tendered);
     const due = Math.max(0, totalCents - tenderedCents) / 100;
@@ -471,8 +506,8 @@ async function renderProducts(context) {
     const paidNow = Math.min(total, tendered);
     const change = method === 'cash' ? Math.max(0, tendered - total) : 0;
     const confirmation = due > 0 && customer
-      ? `Complete sale for ${money(total)}? Paid ${money(paidNow)}; ${money(due)} will be added to ${customer.name}'s existing balance of ${money(customer.balance)}.`
-      : `Complete sale for ${money(total)}? Paid ${money(paidNow)}${change > 0 ? `; change ${money(change)}` : ''}.`;
+      ? `Complete sale for ${money(total)} after a ${money(discount)} discount? Paid ${money(paidNow)}; ${money(due)} will be added to ${customer.name}'s existing balance of ${money(customer.balance)}.`
+      : `Complete sale for ${money(total)} after a ${money(discount)} discount? Paid ${money(paidNow)}${change > 0 ? `; change ${money(change)}` : ''}.`;
     if (!window.confirm(confirmation)) return;
     const payload = {
       p_customer_id: customerId,
@@ -480,9 +515,17 @@ async function renderProducts(context) {
       p_price_tier: 'retail',
       p_payment_method: method,
       p_amount_tendered: tendered,
+      p_discount_amount: discount,
     };
-    if (pendingCheckout?.payload && JSON.stringify(payload) !== JSON.stringify(pendingCheckout.payload)) {
-      return showAlert('page-alert', 'A previous checkout has an uncertain result. Reload this page to retry it safely, then verify Sales History before starting another sale.');
+    if (pendingCheckout?.payload) {
+      const savedPayload = {
+        ...pendingCheckout.payload,
+        p_discount_amount: Number(pendingCheckout.payload.p_discount_amount ?? 0),
+      };
+      if (JSON.stringify(payload) !== JSON.stringify(savedPayload)) {
+        return showAlert('page-alert', 'A previous checkout has an uncertain result. Reload this page to retry it safely, then verify Sales History before starting another sale.');
+      }
+      pendingCheckout.payload = savedPayload;
     }
     setBusy(button, true, 'Completing sale…');
     window.__opkCheckoutInProgress = true;
@@ -513,11 +556,14 @@ async function renderProducts(context) {
       }
       cart = [];
       localStorage.removeItem(cartKey(user.id));
+      localStorage.removeItem(discountStorageKey);
       localStorage.removeItem(checkoutKey(user.id));
       pendingCheckout = null;
       completedSale = true;
       byId('product-cart-dialog').close();
       byId('catalog-tendered').value = '0';
+      byId('catalog-discount').value = '0';
+      saleDiscount = 0;
       paint();
       window.dispatchEvent(new Event('opk:data-changed'));
       button.textContent = 'Sale completed';
@@ -727,13 +773,16 @@ function productCartDialog(customers) {
     <div class="dialog-heading"><div><h3>Sale cart</h3><p class="module-help">Stock is deducted only after the sale is successfully completed.</p></div><button class="dialog-close" type="button" data-close="product-cart-dialog" aria-label="Close">×</button></div>
     ${alertMarkup('catalog-alert')}
     <div class="catalog-cart-controls"><label class="field"><span>Customer (required for a balance due)</span><select class="input" id="catalog-customer"><option value="">Walk-in customer</option>${customers.map((row) => `<option value="${row.id}">${escapeHtml(row.name)}${Number(row.balance) > 0 ? ` · owing ${money(row.balance)}` : ''}</option>`).join('')}</select></label>
-      <label class="field"><span>Payment method</span><select class="input" id="catalog-payment"><option value="cash">Cash</option><option value="mobile_money">Mobile money</option><option value="card">Card</option><option value="bank_transfer">Bank transfer</option><option value="credit">Credit (no payment today)</option></select></label>
+      <label class="field"><span>Payment method</span><select class="input" id="catalog-payment"><option value="cash">Cash</option><option value="mobile_money">Mobile money</option></select></label>
+      <label class="field"><span>Discount for this sale (GHS)</span><input class="input" id="catalog-discount" type="number" min="0" step=".01" value="0"></label>
       <label class="field" id="catalog-tendered-wrap"><span>Amount received (GHS)</span><input class="input" id="catalog-tendered" type="number" min="0" step=".01" value="0"></label>
     </div>
     <div id="catalog-payment-note" class="catalog-payment-note" role="status" aria-live="polite" hidden></div>
     <div id="catalog-cart-lines"></div>
     <div class="pos-total-row"><span>Subtotal</span><strong id="catalog-cart-total">${money(0)}</strong></div>
-    <div class="pos-total-row"><span>Estimated balance due</span><strong id="catalog-cart-due">${money(0)}</strong></div>
+    <div class="pos-total-row"><span>Discount</span><strong id="catalog-cart-discount">−${money(0)}</strong></div>
+    <div class="pos-total-row"><span>Total after discount</span><strong id="catalog-cart-grand-total">${money(0)}</strong></div>
+    <div class="pos-total-row"><span>Estimated change</span><strong id="catalog-cart-change">${money(0)}</strong></div>
     <div class="dialog-actions"><button class="btn btn-outline" id="catalog-clear-cart" type="button">Clear cart</button><button class="btn btn-primary" id="catalog-complete-sale" type="button">Complete sale</button></div>
   </dialog>`;
 }

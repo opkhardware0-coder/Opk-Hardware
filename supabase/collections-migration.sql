@@ -3,10 +3,13 @@
 
 -- Repair legacy installations where sale_items was created before the POS
 -- migration added its product snapshot columns.
-alter table public.sale_items add column if not exists product_name text;
+alter table public.sale_items
+  add column if not exists product_name text,
+  add column if not exists product_name_snapshot text;
 alter table public.sale_items add column if not exists sku text;
 alter table public.sale_items add column if not exists price_tier text not null default 'retail';
 alter table public.sale_items add column if not exists line_total numeric(12, 2);
+alter table public.sale_items add column if not exists total_price numeric(12, 2);
 alter table public.sale_items add column if not exists created_at timestamptz not null default now();
 update public.sale_items si
 set product_name = coalesce(nullif(trim(p.name), ''), 'Historical product')
@@ -15,6 +18,14 @@ where si.product_id = p.id and (si.product_name is null or trim(si.product_name)
 update public.sale_items set product_name = 'Historical product'
 where product_name is null or trim(product_name) = '';
 alter table public.sale_items alter column product_name set not null;
+update public.sale_items
+set product_name_snapshot = coalesce(nullif(trim(product_name_snapshot), ''), product_name, 'Historical product')
+where product_name_snapshot is null or trim(product_name_snapshot) = '';
+alter table public.sale_items alter column product_name_snapshot set not null;
+update public.sale_items
+set total_price = coalesce(total_price, line_total, round(quantity * unit_price, 2))
+where total_price is null;
+alter table public.sale_items alter column total_price set not null;
 
 alter table public.products add column if not exists image_path text;
 
@@ -286,7 +297,7 @@ begin
       except select product_id from jsonb_to_recordset(p_items) as item(product_id uuid, quantity numeric))
   ) then raise exception 'Collection quantities must match the products in this sale.'; end if;
 
-  v_sale := public.complete_sale(p_customer_id, p_items, p_price_tier, p_payment_method, p_amount_tendered);
+  v_sale := public.complete_sale(p_customer_id, p_items, p_price_tier, p_payment_method, p_amount_tendered, 0);
   v_sale_id := (v_sale ->> 'sale_id')::uuid;
   select coalesce(nullif(trim(full_name), ''), 'Staff member') into v_actor_name
   from public.profiles where id = (select auth.uid());
@@ -362,7 +373,8 @@ create or replace function public.complete_sale_once(
   p_price_tier text,
   p_payment_method text,
   p_amount_tendered numeric,
-  p_request_id uuid
+  p_request_id uuid,
+  p_discount_amount numeric
 )
 returns jsonb
 language plpgsql
@@ -371,6 +383,7 @@ set search_path = ''
 as $$
 declare
   v_hash text;
+  v_legacy_hash text;
   v_existing_hash text;
   v_result jsonb;
 begin
@@ -381,18 +394,29 @@ begin
     'items', p_items,
     'price_tier', p_price_tier,
     'payment_method', p_payment_method,
+    'amount_tendered', p_amount_tendered,
+    'discount_amount', coalesce(p_discount_amount, 0)
+  )::text);
+  v_legacy_hash := pg_catalog.md5(pg_catalog.jsonb_build_object(
+    'customer_id', p_customer_id,
+    'items', p_items,
+    'price_tier', p_price_tier,
+    'payment_method', p_payment_method,
     'amount_tendered', p_amount_tendered
   )::text);
   select request_hash, result into v_existing_hash, v_result
   from public.sale_checkout_requests
   where request_id = p_request_id and requested_by = (select auth.uid());
   if found then
-    if v_existing_hash <> v_hash then
-      raise exception 'This checkout request was already completed with different sale details. Check Sales History before starting another sale.';
+    if v_existing_hash <> v_hash
+      and not (coalesce(p_discount_amount, 0) = 0 and v_existing_hash = v_legacy_hash) then
+      raise exception 'This checkout request was already completed with different cart details. Check Sales History before starting another sale.';
     end if;
     return v_result;
   end if;
-  v_result := public.complete_sale(p_customer_id, p_items, p_price_tier, p_payment_method, p_amount_tendered);
+  v_result := public.complete_sale(
+    p_customer_id, p_items, p_price_tier, p_payment_method, p_amount_tendered, coalesce(p_discount_amount, 0)
+  );
   insert into public.sale_checkout_requests (request_id, requested_by, request_hash, result)
   values (p_request_id, (select auth.uid()), v_hash, v_result);
   return v_result;
@@ -482,14 +506,17 @@ $$;
 revoke all on function public.create_product_with_stock(text, text, text, text, numeric, numeric, numeric, numeric, numeric) from public;
 revoke all on function public.create_product_with_stock(text, text, text, text, numeric, numeric, numeric, numeric, numeric, text) from public;
 revoke all on function public.create_product_with_stock(text, text, text, text, numeric, numeric, numeric, numeric, numeric) from authenticated;
-revoke all on function public.complete_sale(uuid, jsonb, text, text, numeric) from authenticated;
-revoke all on function public.complete_sale_once(uuid, jsonb, text, text, numeric, uuid) from public;
+revoke all on function public.complete_sale(uuid, jsonb, text, text, numeric) from public, authenticated;
+revoke all on function public.complete_sale(uuid, jsonb, text, text, numeric, numeric) from public;
+revoke all on function public.complete_sale_once(uuid, jsonb, text, text, numeric, uuid) from public, authenticated;
+revoke all on function public.complete_sale_once(uuid, jsonb, text, text, numeric, uuid, numeric) from public;
 revoke all on function public.complete_sale_with_collection(uuid, jsonb, text, text, numeric, jsonb, uuid, date, text) from public;
 revoke all on function public.record_goods_collection(uuid, numeric, text) from public;
 revoke all on function public.get_staff_directory() from public;
 grant execute on function public.create_product_with_stock(text, text, text, text, numeric, numeric, numeric, numeric, numeric, text) to authenticated;
 grant execute on function public.complete_sale_with_collection(uuid, jsonb, text, text, numeric, jsonb, uuid, date, text) to authenticated;
-grant execute on function public.complete_sale_once(uuid, jsonb, text, text, numeric, uuid) to authenticated;
+grant execute on function public.complete_sale(uuid, jsonb, text, text, numeric, numeric) to authenticated;
+grant execute on function public.complete_sale_once(uuid, jsonb, text, text, numeric, uuid, numeric) to authenticated;
 grant execute on function public.record_goods_collection(uuid, numeric, text) to authenticated;
 grant execute on function public.get_staff_directory() to authenticated;
 grant update (image_path) on public.products to authenticated;

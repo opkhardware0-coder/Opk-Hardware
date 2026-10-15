@@ -7,18 +7,23 @@ create table if not exists public.sale_items (
   sale_id uuid not null references public.sales (id) on delete restrict,
   product_id uuid references public.products (id) on delete set null,
   product_name text not null,
+  product_name_snapshot text not null,
   sku text,
   quantity numeric(12, 3) not null check (quantity > 0),
   unit_price numeric(12, 2) not null check (unit_price >= 0),
+  total_price numeric(12, 2) not null check (total_price >= 0),
   price_tier text not null check (price_tier in ('retail', 'wholesale')),
   line_total numeric(12, 2) not null check (line_total >= 0),
   created_at timestamptz not null default now()
 );
 
-alter table public.sale_items add column if not exists product_name text;
+alter table public.sale_items
+  add column if not exists product_name text,
+  add column if not exists product_name_snapshot text;
 alter table public.sale_items add column if not exists sku text;
 alter table public.sale_items add column if not exists price_tier text not null default 'retail';
 alter table public.sale_items add column if not exists line_total numeric(12, 2);
+alter table public.sale_items add column if not exists total_price numeric(12, 2);
 alter table public.sale_items add column if not exists created_at timestamptz not null default now();
 update public.sale_items si
 set product_name = coalesce(nullif(trim(p.name), ''), 'Historical product')
@@ -27,6 +32,14 @@ where si.product_id = p.id and (si.product_name is null or trim(si.product_name)
 update public.sale_items set product_name = 'Historical product'
 where product_name is null or trim(product_name) = '';
 alter table public.sale_items alter column product_name set not null;
+update public.sale_items
+set product_name_snapshot = coalesce(nullif(trim(product_name_snapshot), ''), product_name, 'Historical product')
+where product_name_snapshot is null or trim(product_name_snapshot) = '';
+alter table public.sale_items alter column product_name_snapshot set not null;
+update public.sale_items
+set total_price = coalesce(total_price, line_total, round(quantity * unit_price, 2))
+where total_price is null;
+alter table public.sale_items alter column total_price set not null;
 
 create table if not exists public.suppliers (
   id uuid primary key default gen_random_uuid(),
@@ -181,7 +194,8 @@ create or replace function public.complete_sale(
   p_items jsonb,
   p_price_tier text,
   p_payment_method text,
-  p_amount_tendered numeric
+  p_amount_tendered numeric,
+  p_discount_amount numeric
 )
 returns jsonb
 language plpgsql
@@ -193,6 +207,8 @@ declare
   v_product public.products%rowtype;
   v_lines jsonb := '[]'::jsonb;
   v_subtotal numeric(12, 2) := 0;
+  v_discount numeric(12, 2) := coalesce(p_discount_amount, 0);
+  v_grand_total numeric(12, 2);
   v_line_total numeric(12, 2);
   v_tendered numeric(12, 2) := coalesce(p_amount_tendered, 0);
   v_paid numeric(12, 2);
@@ -206,11 +222,14 @@ begin
   select role into v_role from public.profiles where id = (select auth.uid());
   if v_role is null then raise exception 'A staff profile is required to make a sale.'; end if;
   if p_price_tier is null or p_price_tier not in ('retail', 'wholesale') then raise exception 'Choose retail or wholesale pricing.'; end if;
-  if p_payment_method is null or p_payment_method not in ('cash', 'mobile_money', 'card', 'bank_transfer', 'credit') then
+  if p_payment_method is null or p_payment_method not in ('cash', 'mobile_money') then
     raise exception 'Choose a supported payment method.';
   end if;
   if p_amount_tendered is not null and p_amount_tendered <> round(p_amount_tendered, 2) then
     raise exception 'Payment amount supports up to two decimal places.';
+  end if;
+  if v_discount < 0 or v_discount <> round(v_discount, 2) then
+    raise exception 'Discount must be non-negative and use up to two decimal places.';
   end if;
   if v_tendered < 0 then raise exception 'Payment amount cannot be negative.'; end if;
   if p_items is null or jsonb_typeof(p_items) is distinct from 'array' then
@@ -255,12 +274,14 @@ begin
     ));
   end loop;
 
-  if v_tendered > v_subtotal and p_payment_method <> 'cash' then
+  if v_discount > v_subtotal then raise exception 'Discount cannot exceed the sale subtotal.'; end if;
+  v_grand_total := v_subtotal - v_discount;
+  if v_tendered > v_grand_total and p_payment_method <> 'cash' then
     raise exception 'Only cash payments can include change.';
   end if;
-  v_paid := least(v_subtotal, v_tendered);
-  v_due := v_subtotal - v_paid;
-  v_change := greatest(0, v_tendered - v_subtotal);
+  v_paid := least(v_grand_total, v_tendered);
+  v_due := v_grand_total - v_paid;
+  v_change := greatest(0, v_tendered - v_grand_total);
   if v_due > 0 and p_customer_id is null then
     raise exception 'Select a customer to record a partial payment or credit balance.';
   end if;
@@ -276,7 +297,7 @@ begin
     receipt_no, customer_id, created_by, subtotal, discount, tax, grand_total,
     amount_paid, payment_method, status
   ) values (
-    v_receipt, p_customer_id, (select auth.uid()), v_subtotal, 0, 0, v_subtotal,
+    v_receipt, p_customer_id, (select auth.uid()), v_subtotal, v_discount, 0, v_grand_total,
     v_paid, p_payment_method, 'completed'
   ) returning id into v_sale_id;
 
@@ -286,10 +307,11 @@ begin
   )
   loop
     insert into public.sale_items (
-      sale_id, product_id, product_name, sku, quantity, unit_price, price_tier, line_total
+      sale_id, product_id, product_name, product_name_snapshot, sku, quantity, unit_price,
+      total_price, price_tier, line_total
     ) values (
-      v_sale_id, v_item.product_id, v_item.product_name, v_item.sku,
-      v_item.quantity, v_item.unit_price, p_price_tier, v_item.line_total
+      v_sale_id, v_item.product_id, v_item.product_name, v_item.product_name, v_item.sku,
+      v_item.quantity, v_item.unit_price, v_item.line_total, p_price_tier, v_item.line_total
     );
     update public.products set stock_qty = stock_qty - v_item.quantity where id = v_item.product_id;
     insert into public.inventory_movements (
@@ -304,7 +326,7 @@ begin
 
   return jsonb_build_object(
     'sale_id', v_sale_id, 'receipt_no', v_receipt, 'subtotal', v_subtotal,
-    'grand_total', v_subtotal, 'amount_paid', v_paid, 'balance_due', v_due, 'change_due', v_change,
+    'discount', v_discount, 'grand_total', v_grand_total, 'amount_paid', v_paid, 'balance_due', v_due, 'change_due', v_change,
     'customer_name', v_customer_name
   );
 end;
@@ -517,13 +539,14 @@ begin
 end;
 $$;
 
-revoke all on function public.complete_sale(uuid, jsonb, text, text, numeric) from public;
+revoke all on function public.complete_sale(uuid, jsonb, text, text, numeric) from public, authenticated;
+revoke all on function public.complete_sale(uuid, jsonb, text, text, numeric, numeric) from public;
 revoke all on function public.receive_purchase(uuid, jsonb, text) from public;
 revoke all on function public.adjust_stock(uuid, numeric, text) from public;
 revoke all on function public.record_expense(text, text, numeric, text, text) from public;
 revoke all on function public.record_customer_payment(uuid, numeric, text, text, text) from public;
 revoke all on function public.set_staff_role(uuid, text) from public;
-grant execute on function public.complete_sale(uuid, jsonb, text, text, numeric) to authenticated;
+grant execute on function public.complete_sale(uuid, jsonb, text, text, numeric, numeric) to authenticated;
 grant execute on function public.receive_purchase(uuid, jsonb, text) to authenticated;
 grant execute on function public.adjust_stock(uuid, numeric, text) to authenticated;
 grant execute on function public.record_expense(text, text, numeric, text, text) to authenticated;
